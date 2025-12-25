@@ -376,7 +376,14 @@ function App() {
                 <FileText className={`w-4 h-4 ${file.type === 'jsonl' ? 'text-devin-teal' : 'text-devin-muted'}`} />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-devin-text truncate">{file.name}</p>
-                  <p className="text-xs text-devin-muted">{(file.size / 1024).toFixed(1)} KB</p>
+                  <div className="flex items-center gap-2 text-xs text-devin-muted">
+                    <span>{(file.size / 1024).toFixed(1)} KB</span>
+                    {file.entries > 0 && (
+                      <span className="px-1.5 py-0.5 bg-devin-teal/20 text-devin-teal rounded text-xs font-medium">
+                        {file.entries.toLocaleString()} entries
+                      </span>
+                    )}
+                  </div>
                 </div>
               </label>
             ))}
@@ -387,19 +394,7 @@ function App() {
           )}
         </div>
 
-        {/* Directory Picker Button */}
-        <div className="p-4 border-t border-devin-border">
-          <button
-            onClick={() => setShowFilePicker(true)}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-devin-card hover:bg-devin-border rounded-lg text-sm text-devin-text transition-colors"
-          >
-            <FolderOpen className="w-4 h-4" />
-            Change Directory
-          </button>
-          <p className="text-xs text-devin-muted mt-2 truncate" title={currentDir}>
-            {currentDir}
-          </p>
-        </div>
+        {/* Directory Picker Button - REMOVED (moved to header) */}
       </aside>
 
       {/* Main Content */}
@@ -413,6 +408,20 @@ function App() {
             >
               <BarChart3 className="w-5 h-5" />
             </button>
+
+            {/* Directory Selector - Moved to header */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowFilePicker(true)}
+                className="flex items-center gap-2 px-3 py-1.5 bg-devin-card hover:bg-devin-border rounded-lg text-sm text-devin-text transition-colors"
+              >
+                <FolderOpen className="w-4 h-4" />
+                <span className="hidden sm:inline">Change Directory</span>
+              </button>
+              <p className="text-xs text-devin-muted max-w-xs truncate" title={currentDir} style={{wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: '1.2'}}>
+                {currentDir}
+              </p>
+            </div>
 
             {/* Search */}
             <div className="flex-1 flex items-center gap-2">
@@ -1229,7 +1238,7 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
                 }`}
               >
                 <FolderOpen className={`w-4 h-4 ${dir.has_logs ? 'text-devin-teal' : 'text-devin-muted'}`} />
-                <span className="flex-1 text-left truncate">{dir.name}</span>
+                <span className="flex-1 text-left" style={{wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: '1.2'}}>{dir.name}</span>
                 {dir.has_logs && (
                   <span className="text-xs text-devin-teal">Has logs</span>
                 )}

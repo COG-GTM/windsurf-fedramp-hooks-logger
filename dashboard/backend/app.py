@@ -115,6 +115,18 @@ def parse_text_log(filepath):
     return entries
 
 
+def count_log_entries(filepath):
+    """Count number of entries in a JSONL file."""
+    if not filepath.endswith('.jsonl') or not os.path.exists(filepath):
+        return 0
+    
+    try:
+        with open(filepath, 'r') as f:
+            return sum(1 for line in f if line.strip())
+    except:
+        return 0
+
+
 @app.route('/api/logs/files', methods=['GET'])
 def get_log_files():
     """Get list of available log files in a directory."""
@@ -128,12 +140,14 @@ def get_log_files():
         filepath = os.path.join(log_dir, f)
         if os.path.isfile(filepath) and (f.endswith('.jsonl') or f.endswith('.log')):
             stat = os.stat(filepath)
+            entry_count = count_log_entries(filepath)
             files.append({
                 "name": f,
                 "path": filepath,
                 "size": stat.st_size,
                 "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                "type": "jsonl" if f.endswith('.jsonl') else "log"
+                "type": "jsonl" if f.endswith('.jsonl') else "log",
+                "entries": entry_count
             })
     
     files.sort(key=lambda x: x['modified'], reverse=True)
@@ -146,8 +160,8 @@ def get_log_data():
     filepaths = request.args.getlist('files')
     
     if not filepaths:
-        # Default to consolidated log
-        filepaths = [os.path.join(DEFAULT_LOG_DIR, 'consolidated.jsonl')]
+        # Default to all events log
+        filepaths = [os.path.join(DEFAULT_LOG_DIR, 'all_events.jsonl')]
     
     all_entries = []
     
