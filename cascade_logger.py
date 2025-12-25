@@ -10,6 +10,11 @@ Captures all available hook events with complete metadata for filtering and anal
 - pre_mcp_tool_use / post_mcp_tool_use: MCP tool invocations
 
 Data is stored in JSONL format for easy filtering and UI integration.
+
+Optimizations:
+- Buffered writing to reduce I/O overhead
+- File locking to prevent corruption
+- Configurable via environment variables
 """
 
 import sys
@@ -19,13 +24,28 @@ import os
 import getpass
 import socket
 import platform
+import atexit
+import threading
+import fcntl
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Dict, List
 
-# Configuration
-LOG_DIR = Path("/Users/chasedalton/CascadeProjects/windsurf-logger/logs")
-MAX_CONTENT_LENGTH = 100000  # Truncate extremely large content
+# Try to import config, fall back to defaults
+try:
+    from config import LOG_DIR, MAX_CONTENT_LENGTH, LOG_BUFFER_SIZE, LOG_FLUSH_INTERVAL
+except ImportError:
+    LOG_DIR = Path(os.getenv(
+        "WINDSURF_LOG_DIR",
+        str(Path(__file__).parent / "logs")
+    ))
+    MAX_CONTENT_LENGTH = int(os.getenv("WINDSURF_MAX_CONTENT_LENGTH", "100000"))
+    LOG_BUFFER_SIZE = int(os.getenv("WINDSURF_LOG_BUFFER_SIZE", "10"))
+    LOG_FLUSH_INTERVAL = float(os.getenv("WINDSURF_LOG_FLUSH_INTERVAL", "5.0"))
+
+# Ensure LOG_DIR is a Path object
+if isinstance(LOG_DIR, str):
+    LOG_DIR = Path(LOG_DIR)
 
 # Event categories for filtering
 EVENT_CATEGORIES = {
@@ -51,6 +71,98 @@ EVENT_PHASES = {
     "pre_mcp_tool_use": "pre",
     "post_mcp_tool_use": "post",
 }
+
+
+# ============================================================================
+# Buffered Log Writer
+# ============================================================================
+class BufferedLogWriter:
+    """
+    Thread-safe buffered log writer with file locking.
+    Reduces I/O overhead by batching writes.
+    """
+    
+    def __init__(self, buffer_size: int = LOG_BUFFER_SIZE, flush_interval: float = LOG_FLUSH_INTERVAL):
+        self.buffer_size = buffer_size
+        self.flush_interval = flush_interval
+        self.buffers: Dict[Path, List[str]] = {}
+        self.lock = threading.Lock()
+        self._flush_timer: Optional[threading.Timer] = None
+        self._start_flush_timer()
+        atexit.register(self.flush_all)
+    
+    def _start_flush_timer(self) -> None:
+        """Start periodic flush timer."""
+        if self._flush_timer:
+            self._flush_timer.cancel()
+        self._flush_timer = threading.Timer(self.flush_interval, self._periodic_flush)
+        self._flush_timer.daemon = True
+        self._flush_timer.start()
+    
+    def _periodic_flush(self) -> None:
+        """Periodic flush callback."""
+        self.flush_all()
+        self._start_flush_timer()
+    
+    def write(self, filepath: Path, content: str) -> None:
+        """Add content to buffer, flush if buffer is full."""
+        with self.lock:
+            if filepath not in self.buffers:
+                self.buffers[filepath] = []
+            
+            self.buffers[filepath].append(content)
+            
+            if len(self.buffers[filepath]) >= self.buffer_size:
+                self._flush_file(filepath)
+    
+    def _flush_file(self, filepath: Path) -> None:
+        """Flush buffer for a specific file (must hold lock)."""
+        if filepath not in self.buffers or not self.buffers[filepath]:
+            return
+        
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            with open(filepath, 'a', encoding='utf-8') as f:
+                # Acquire exclusive lock
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    f.write(''.join(self.buffers[filepath]))
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            self.buffers[filepath] = []
+        except (IOError, OSError) as e:
+            # Log error but don't crash
+            error_log = LOG_DIR / "errors.log"
+            try:
+                with open(error_log, 'a') as ef:
+                    ef.write(f"[{datetime.now().isoformat()}] Write error to {filepath}: {e}\n")
+            except (IOError, OSError):
+                pass
+    
+    def flush_all(self) -> None:
+        """Flush all buffers."""
+        with self.lock:
+            for filepath in list(self.buffers.keys()):
+                self._flush_file(filepath)
+    
+    def close(self) -> None:
+        """Clean up resources."""
+        if self._flush_timer:
+            self._flush_timer.cancel()
+        self.flush_all()
+
+
+# Global buffered writer instance
+_log_writer: Optional[BufferedLogWriter] = None
+
+
+def get_log_writer() -> BufferedLogWriter:
+    """Get or create the global log writer instance."""
+    global _log_writer
+    if _log_writer is None:
+        _log_writer = BufferedLogWriter()
+    return _log_writer
 
 
 def get_system_info() -> dict:
@@ -288,43 +400,37 @@ def process_event(data: dict) -> dict:
 
 
 def write_logs(log_entry: dict) -> None:
-    """Write log entry to various log files for different use cases."""
+    """Write log entry to various log files using buffered writer."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     
+    writer = get_log_writer()
     action = log_entry["action"]
     category = log_entry["category"]
+    json_line = json.dumps(log_entry) + "\n"
     
     # 1. Master log - all events
-    master_log = LOG_DIR / "all_events.jsonl"
-    with open(master_log, "a") as f:
-        f.write(json.dumps(log_entry) + "\n")
+    writer.write(LOG_DIR / "all_events.jsonl", json_line)
     
     # 2. Category-specific logs for easy filtering
-    category_log = LOG_DIR / f"{category}.jsonl"
-    with open(category_log, "a") as f:
-        f.write(json.dumps(log_entry) + "\n")
+    writer.write(LOG_DIR / f"{category}.jsonl", json_line)
     
     # 3. Action-specific logs for granular analysis
-    action_log = LOG_DIR / f"{action}.jsonl"
-    with open(action_log, "a") as f:
-        f.write(json.dumps(log_entry) + "\n")
+    writer.write(LOG_DIR / f"{action}.jsonl", json_line)
     
     # 4. Session log (grouped by trajectory)
     trajectory_id = log_entry.get("trajectory_id")
     if trajectory_id:
         session_dir = LOG_DIR / "sessions"
         session_dir.mkdir(exist_ok=True)
-        session_log = session_dir / f"{trajectory_id}.jsonl"
-        with open(session_log, "a") as f:
-            f.write(json.dumps(log_entry) + "\n")
+        # Sanitize trajectory_id to prevent path traversal
+        safe_trajectory_id = "".join(c for c in trajectory_id if c.isalnum() or c in "-_")
+        writer.write(session_dir / f"{safe_trajectory_id}.jsonl", json_line)
     
     # 5. Code changes log (only write events with edits)
     if category == "file_write" and log_entry["data"].get("edit_count", 0) > 0:
-        code_log = LOG_DIR / "code_changes.jsonl"
-        with open(code_log, "a") as f:
-            f.write(json.dumps(log_entry) + "\n")
+        writer.write(LOG_DIR / "code_changes.jsonl", json_line)
     
-    # 6. Human-readable summary log
+    # 6. Human-readable summary log (write immediately, not buffered)
     write_human_readable(log_entry)
 
 
@@ -337,39 +443,52 @@ def write_human_readable(log_entry: dict) -> None:
     system = log_entry["system"]
     data = log_entry["data"]
     
-    with open(summary_log, "a") as f:
-        f.write(f"\n{'='*80}\n")
-        f.write(f"[{timestamp}] {action}\n")
-        f.write(f"User: {system['username']}@{system['hostname']}\n")
-        
-        if log_entry.get("trajectory_id"):
-            f.write(f"Trajectory: {log_entry['trajectory_id']}\n")
-        
-        if action == "pre_user_prompt":
-            prompt = data.get("user_prompt", "")[:500]
-            f.write(f"Prompt ({data.get('prompt_length', 0)} chars):\n{prompt}\n")
-            if data.get("prompt_truncated"):
-                f.write("... [truncated]\n")
-        
-        elif action in ("pre_read_code", "post_read_code"):
-            f.write(f"File: {data.get('file_path', 'unknown')}\n")
-        
-        elif action in ("pre_write_code", "post_write_code"):
-            f.write(f"File: {data.get('file_path', 'unknown')}\n")
-            f.write(f"Edits: {data.get('edit_count', 0)}, ")
-            f.write(f"Lines: +{data.get('total_lines_added', 0)}/-{data.get('total_lines_removed', 0)}\n")
-        
-        elif action in ("pre_run_command", "post_run_command"):
-            f.write(f"Command: {data.get('command_line', 'unknown')}\n")
-            f.write(f"CWD: {data.get('cwd', 'unknown')}\n")
-        
-        elif action in ("pre_mcp_tool_use", "post_mcp_tool_use"):
-            f.write(f"MCP Tool: {data.get('mcp_full_tool', 'unknown')}\n")
-            f.write(f"Arguments: {json.dumps(data.get('mcp_tool_arguments', {}))[:200]}\n")
+    lines = [
+        f"\n{'='*80}",
+        f"[{timestamp}] {action}",
+        f"User: {system['username']}@{system['hostname']}",
+    ]
+    
+    if log_entry.get("trajectory_id"):
+        lines.append(f"Trajectory: {log_entry['trajectory_id']}")
+    
+    if action == "pre_user_prompt":
+        prompt = data.get("user_prompt", "")[:500]
+        lines.append(f"Prompt ({data.get('prompt_length', 0)} chars):")
+        lines.append(prompt)
+        if data.get("prompt_truncated"):
+            lines.append("... [truncated]")
+    
+    elif action in ("pre_read_code", "post_read_code"):
+        lines.append(f"File: {data.get('file_path', 'unknown')}")
+    
+    elif action in ("pre_write_code", "post_write_code"):
+        lines.append(f"File: {data.get('file_path', 'unknown')}")
+        lines.append(f"Edits: {data.get('edit_count', 0)}, Lines: +{data.get('total_lines_added', 0)}/-{data.get('total_lines_removed', 0)}")
+    
+    elif action in ("pre_run_command", "post_run_command"):
+        lines.append(f"Command: {data.get('command_line', 'unknown')}")
+        lines.append(f"CWD: {data.get('cwd', 'unknown')}")
+    
+    elif action in ("pre_mcp_tool_use", "post_mcp_tool_use"):
+        lines.append(f"MCP Tool: {data.get('mcp_full_tool', 'unknown')}")
+        lines.append(f"Arguments: {json.dumps(data.get('mcp_tool_arguments', {}))[:200]}")
+    
+    # Write with file locking
+    try:
+        with open(summary_log, "a", encoding='utf-8') as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.write('\n'.join(lines) + '\n')
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except (IOError, OSError):
+        pass  # Silently fail for summary log
 
 
 def main():
     """Main entry point for the Cascade logger."""
+    input_data = ""
     try:
         input_data = sys.stdin.read()
         
@@ -380,22 +499,34 @@ def main():
         log_entry = process_event(data)
         write_logs(log_entry)
         
+        # Ensure buffers are flushed before exit
+        writer = get_log_writer()
+        writer.flush_all()
+        
         sys.exit(0)
         
     except json.JSONDecodeError as e:
-        error_log = LOG_DIR / "errors.log"
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(error_log, "a") as f:
-            f.write(f"[{datetime.now().isoformat()}] JSON parse error: {e}\n")
-            f.write(f"Input: {input_data[:1000]}\n")
+        log_error(f"JSON parse error: {e}\nInput: {input_data[:1000]}")
         sys.exit(1)
         
     except Exception as e:
-        error_log = LOG_DIR / "errors.log"
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(error_log, "a") as f:
-            f.write(f"[{datetime.now().isoformat()}] Error: {e}\n")
+        log_error(f"Error: {e}")
         sys.exit(1)
+
+
+def log_error(message: str) -> None:
+    """Log an error message to the error log."""
+    error_log = LOG_DIR / "errors.log"
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(error_log, "a", encoding='utf-8') as f:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.write(f"[{datetime.now().isoformat()}] {message}\n")
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+    except (IOError, OSError):
+        pass  # Can't log the error, just continue
 
 
 if __name__ == "__main__":

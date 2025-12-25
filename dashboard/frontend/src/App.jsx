@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Search, 
   Filter, 
@@ -10,6 +10,7 @@ import {
   Clock, 
   ChevronRight,
   ChevronDown,
+  ChevronLeft,
   X,
   RefreshCw,
   BarChart3,
@@ -25,19 +26,24 @@ import {
   Zap,
   Regex,
   FileCode,
-  History
+  History,
+  ArrowRight,
+  Workflow,
+  Hash,
+  Calendar,
+  Activity
 } from 'lucide-react';
 
 const API_BASE = '/api';
 
 const CATEGORY_CONFIG = {
-  prompt: { icon: MessageSquare, color: 'blue', label: 'Prompt', bgClass: 'bg-blue-500/20', textClass: 'text-blue-400' },
-  file_read: { icon: Eye, color: 'yellow', label: 'File Read', bgClass: 'bg-yellow-500/20', textClass: 'text-yellow-400' },
-  file_write: { icon: Edit3, color: 'green', label: 'Code Change', bgClass: 'bg-green-500/20', textClass: 'text-green-400' },
-  command: { icon: Play, color: 'orange', label: 'Command', bgClass: 'bg-orange-500/20', textClass: 'text-orange-400' },
-  mcp: { icon: Zap, color: 'purple', label: 'MCP Tool', bgClass: 'bg-purple-500/20', textClass: 'text-purple-400' },
-  response: { icon: Code, color: 'teal', label: 'Response', bgClass: 'bg-teal-500/20', textClass: 'text-teal-400' },
-  unknown: { icon: FileText, color: 'gray', label: 'Unknown', bgClass: 'bg-gray-500/20', textClass: 'text-gray-400' }
+  prompt: { icon: MessageSquare, color: 'teal', label: 'Prompt', bgClass: 'bg-ws-teal/10', textClass: 'text-ws-teal' },
+  file_read: { icon: Eye, color: 'orange', label: 'File Read', bgClass: 'bg-ws-orange/10', textClass: 'text-ws-orange' },
+  file_write: { icon: Edit3, color: 'teal', label: 'Code Change', bgClass: 'bg-ws-teal/10', textClass: 'text-ws-teal' },
+  command: { icon: Play, color: 'orange', label: 'Command', bgClass: 'bg-ws-orange/10', textClass: 'text-ws-orange' },
+  mcp: { icon: Zap, color: 'teal', label: 'MCP Tool', bgClass: 'bg-ws-teal/10', textClass: 'text-ws-teal' },
+  response: { icon: Code, color: 'teal', label: 'Response', bgClass: 'bg-ws-teal/10', textClass: 'text-ws-teal' },
+  unknown: { icon: FileText, color: 'gray', label: 'Unknown', bgClass: 'bg-ws-text-muted/10', textClass: 'text-ws-text-muted' }
 };
 
 function App() {
@@ -59,9 +65,27 @@ function App() {
   const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
   const [currentDir, setCurrentDir] = useState('/Users/chasedalton/CascadeProjects/windsurf-logger/logs');
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [viewMode, setViewMode] = useState('list'); // 'list' or 'timeline'
+  const [viewMode, setViewMode] = useState('workflow'); // 'workflow', 'timeline', or 'list'
   const [toasts, setToasts] = useState([]);
   const [selectedEntryIndex, setSelectedEntryIndex] = useState(-1);
+  const [selectedSession, setSelectedSession] = useState(null);
+  const [workflowExpandedGroups, setWorkflowExpandedGroups] = useState(new Set());
+  const [allUsers, setAllUsers] = useState([]);
+  const [allSessions, setAllSessions] = useState([]);
+
+  // Auto-select a session with prompts when switching to workflow view
+  useEffect(() => {
+    if (viewMode === 'workflow' && !selectedSession && sessions.length > 0) {
+      // Prefer 'no_session' if it has prompts, otherwise find first session with prompts
+      const noSession = sessions.find(s => s.id === 'no_session' && s.categories?.prompt > 0);
+      const sessionWithPrompts = sessions.find(s => s.categories?.prompt > 0);
+      if (noSession) {
+        setSelectedSession(noSession.id);
+      } else if (sessionWithPrompts) {
+        setSelectedSession(sessionWithPrompts.id);
+      }
+    }
+  }, [viewMode, sessions, selectedSession]);
   
   const searchInputRef = useRef(null);
   const logContainerRef = useRef(null);
@@ -102,6 +126,19 @@ function App() {
       const res = await fetch(`${API_BASE}/logs/sessions?dir=${encodeURIComponent(currentDir)}`);
       const data = await res.json();
       setSessions(data.sessions || []);
+      // Extract unique users and session IDs for filter dropdowns
+      const users = new Set();
+      const sessionIds = new Set();
+      (data.sessions || []).forEach(session => {
+        if (session.id && session.id !== 'no_session') {
+          sessionIds.add(session.id);
+        }
+        (session.events || []).forEach(event => {
+          if (event.user) users.add(event.user);
+        });
+      });
+      setAllUsers([...users]);
+      setAllSessions([...sessionIds]);
     } catch (err) {
       console.error('Failed to fetch sessions:', err);
     }
@@ -111,10 +148,36 @@ function App() {
     setLoading(true);
     try {
       let url = `${API_BASE}/logs/data`;
+      const params = [];
+      
       if (selectedFiles.length > 0) {
-        const params = selectedFiles.map(f => `files=${encodeURIComponent(f)}`).join('&');
-        url += `?${params}`;
+        selectedFiles.forEach(f => params.push(`files=${encodeURIComponent(f)}`));
       }
+      
+      // Add filter parameters
+      if (filterCategory !== 'all') {
+        params.push(`category=${filterCategory}`);
+      }
+      if (filterUser !== 'all') {
+        params.push(`user=${encodeURIComponent(filterUser)}`);
+      }
+      if (filterSession !== 'all') {
+        params.push(`session=${encodeURIComponent(filterSession)}`);
+      }
+      if (searchQuery.trim()) {
+        params.push(`q=${encodeURIComponent(searchQuery)}`);
+      }
+      if (dateFrom) {
+        params.push(`date_from=${encodeURIComponent(dateFrom)}`);
+      }
+      if (dateTo) {
+        params.push(`date_to=${encodeURIComponent(dateTo)}`);
+      }
+      
+      if (params.length > 0) {
+        url += `?${params.join('&')}`;
+      }
+      
       const res = await fetch(url);
       const data = await res.json();
       setLogs(data.entries || []);
@@ -124,7 +187,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [selectedFiles]);
+  }, [selectedFiles, filterCategory, filterUser, filterSession, searchQuery, dateFrom, dateTo]);
 
   const searchLogs = useCallback(async () => {
     setLoading(true);
@@ -164,6 +227,17 @@ function App() {
       setLoading(false);
     }
   }, [searchQuery, filterCategory, filterUser, filterSession, dateFrom, dateTo, useRegex, currentDir, addToast]);
+
+  const refreshAll = async () => {
+    addToast('Refreshing all data...', 'info');
+    await Promise.all([
+      fetchFiles(currentDir),
+      fetchStats(),
+      fetchSessions(),
+      fetchLogs()
+    ]);
+    addToast('Data refreshed', 'success');
+  };
 
   const exportLogs = async (format) => {
     const url = `${API_BASE}/logs/export?format=${format}&dir=${encodeURIComponent(currentDir)}${filterCategory !== 'all' ? `&category=${filterCategory}` : ''}`;
@@ -233,12 +307,22 @@ function App() {
   }, [currentDir, fetchFiles, fetchStats, fetchSessions]);
 
   useEffect(() => {
-    if (selectedFiles.length > 0) {
+    fetchLogs();
+  }, [fetchLogs]);
+
+  // Auto-refresh logs when filters change
+  useEffect(() => {
+    if (filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || dateFrom || dateTo) {
       fetchLogs();
-    } else {
-      searchLogs();
     }
-  }, [selectedFiles, fetchLogs, searchLogs]);
+  }, [filterCategory, filterUser, filterSession, dateFrom, dateTo, fetchLogs]);
+
+  // Auto-refresh when search query is cleared (but not on every keystroke)
+  useEffect(() => {
+    if (!searchQuery) {
+      fetchLogs();
+    }
+  }, [searchQuery, fetchLogs]);
 
   const toggleEntry = (id) => {
     setExpandedEntries(prev => {
@@ -261,17 +345,134 @@ function App() {
     });
   };
 
-  const filteredLogs = logs.filter(entry => {
-    const category = entry.category || entry.type || 'unknown';
-    if (filterCategory !== 'all' && category !== filterCategory) return false;
-    if (filterUser !== 'all' && entry.user !== filterUser) return false;
-    if (filterSession !== 'all' && entry.trajectory_id !== filterSession) return false;
-    return true;
-  });
+  // Logs are already filtered by the backend, no need for client-side filtering
+  const filteredLogs = logs;
 
-  const uniqueUsers = [...new Set(logs.map(l => l.user).filter(Boolean))];
-  const uniqueSessions = [...new Set(logs.map(l => l.trajectory_id).filter(Boolean))];
+  // Use allUsers/allSessions from sessions API for stable filter dropdowns
+  const uniqueUsers = allUsers.length > 0 ? allUsers : [...new Set(logs.map(l => l.user).filter(Boolean))];
+  const uniqueSessions = allSessions.length > 0 ? allSessions : [...new Set(logs.map(l => l.trajectory_id).filter(Boolean))];
   const categories = [...new Set(logs.map(l => l.category || l.type).filter(Boolean))];
+
+  // Group events into workflow steps (prompt -> actions)
+  // Note: Prompts may be in 'no_session' while actions are in trajectory sessions
+  // So we need to correlate across all sessions by timestamp
+  const workflowGroups = useMemo(() => {
+    if (!selectedSession) return [];
+    
+    // Gather ALL events from ALL sessions for correlation
+    const allEvents = [];
+    sessions.forEach(session => {
+      (session.events || []).forEach(event => {
+        allEvents.push({ ...event, _sessionId: session.id });
+      });
+    });
+    
+    // Sort all events chronologically
+    allEvents.sort((a, b) => {
+      const timeA = new Date(a.timestamp || 0).getTime();
+      const timeB = new Date(b.timestamp || 0).getTime();
+      return timeA - timeB;
+    });
+    
+    // Get prompts and non-prompt actions
+    const prompts = allEvents.filter(e => (e.category || e.type) === 'prompt');
+    const actions = allEvents.filter(e => (e.category || e.type) !== 'prompt');
+    
+    // If viewing 'no_session' (where prompts live), show prompts with their correlated actions
+    // Otherwise show session-specific view
+    if (selectedSession === 'no_session') {
+      // Build workflow groups: each prompt followed by actions until next prompt
+      const groups = [];
+      
+      for (let i = 0; i < prompts.length; i++) {
+        const prompt = prompts[i];
+        const promptTime = new Date(prompt.timestamp || 0).getTime();
+        const nextPromptTime = i < prompts.length - 1 
+          ? new Date(prompts[i + 1].timestamp || 0).getTime() 
+          : Infinity;
+        
+        // Find actions between this prompt and the next
+        const relatedActions = actions.filter(a => {
+          const actionTime = new Date(a.timestamp || 0).getTime();
+          return actionTime > promptTime && actionTime < nextPromptTime;
+        });
+        
+        groups.push({
+          prompt: prompt,
+          actions: relatedActions,
+          id: prompt.event_id || `group-${i}`
+        });
+      }
+      
+      return groups;
+    } else {
+      // For specific sessions, show that session's events but try to find related prompts
+      const session = sessions.find(s => s.id === selectedSession);
+      if (!session?.events?.length) return [];
+      
+      const sessionEvents = [...session.events].sort((a, b) => {
+        const timeA = new Date(a.timestamp || 0).getTime();
+        const timeB = new Date(b.timestamp || 0).getTime();
+        return timeA - timeB;
+      });
+      
+      // Find the earliest action time in this session
+      const earliestActionTime = sessionEvents.length > 0 
+        ? new Date(sessionEvents[0].timestamp || 0).getTime() 
+        : 0;
+      
+      // Find prompts that occurred just before this session's actions (within 5 minutes)
+      const relevantPrompts = prompts.filter(p => {
+        const promptTime = new Date(p.timestamp || 0).getTime();
+        return promptTime < earliestActionTime && (earliestActionTime - promptTime) < 5 * 60 * 1000;
+      });
+      
+      // Build groups with relevant prompts
+      const groups = [];
+      let actionIndex = 0;
+      
+      for (const prompt of relevantPrompts) {
+        const promptTime = new Date(prompt.timestamp || 0).getTime();
+        const nextPromptTime = relevantPrompts.indexOf(prompt) < relevantPrompts.length - 1
+          ? new Date(relevantPrompts[relevantPrompts.indexOf(prompt) + 1].timestamp || 0).getTime()
+          : Infinity;
+        
+        const relatedActions = sessionEvents.filter(a => {
+          const actionTime = new Date(a.timestamp || 0).getTime();
+          return actionTime > promptTime && actionTime < nextPromptTime;
+        });
+        
+        if (relatedActions.length > 0 || relevantPrompts.length === 1) {
+          groups.push({
+            prompt: prompt,
+            actions: relatedActions,
+            id: prompt.event_id || `group-${groups.length}`
+          });
+          actionIndex += relatedActions.length;
+        }
+      }
+      
+      // If no prompts found, just show session actions grouped
+      if (groups.length === 0 && sessionEvents.length > 0) {
+        groups.push({
+          prompt: null,
+          actions: sessionEvents,
+          id: `session-actions`
+        });
+      }
+      
+      return groups;
+    }
+  }, [selectedSession, sessions]);
+
+  const toggleWorkflowGroup = (id) => {
+    setWorkflowExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const formatTimestamp = (ts) => {
     if (!ts) return 'Unknown';
@@ -289,220 +490,232 @@ function App() {
     return content.substring(0, maxLen) + '...';
   };
 
+  const formatSessionName = (session) => {
+    if (session.id === 'no_session') {
+      return 'Ungrouped Prompts';
+    }
+    
+    // Get user from first event that has a user
+    const user = session.events?.find(e => e.user)?.user || 'Unknown User';
+    
+    // Get datetime from start_time
+    const datetime = session.start_time ? new Date(session.start_time).toLocaleString() : 'Unknown Time';
+    
+    return `${user} - ${datetime}`;
+  };
+
   return (
-    <div className="min-h-screen bg-devin-dark flex">
+    <div className="min-h-screen bg-ws-bg flex">
       {/* Toast Notifications */}
       <ToastContainer toasts={toasts} />
 
       {/* Sidebar */}
-      <aside className={`${sidebarOpen ? 'w-72' : 'w-0'} transition-all duration-300 bg-devin-darker border-r border-devin-border overflow-hidden flex flex-col`}>
-        <div className="p-4 border-b border-devin-border">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-devin-teal rounded-lg flex items-center justify-center">
-              <Terminal className="w-5 h-5 text-white" />
+      <aside className={`${sidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 bg-ws-sidebar border-r border-ws-border overflow-hidden flex flex-col`}>
+        <div className="p-4 border-b border-ws-border">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-ws-teal to-ws-teal-dim flex items-center justify-center shadow-lg shadow-ws-teal/20">
+                <svg viewBox="0 0 24 24" className="w-5 h-5 text-white" fill="currentColor">
+                  <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+                </svg>
+              </div>
+              <div>
+                <span className="font-semibold text-ws-text block">Windsurf Logger</span>
+                <span className="text-[10px] text-ws-text-muted">Analytics Dashboard</span>
+              </div>
             </div>
-            <div>
-              <h1 className="font-semibold text-devin-text">Windsurf Logger</h1>
-              <p className="text-xs text-devin-muted">Dashboard</p>
-            </div>
+            <button 
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="p-1.5 hover:bg-ws-card rounded text-ws-text-muted hover:text-ws-text transition-all duration-200 opacity-70 hover:opacity-100"
+              title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+            >
+              <ChevronLeft className={`w-4 h-4 transition-transform duration-300 ${sidebarOpen ? '' : 'rotate-180'}`} />
+            </button>
           </div>
         </div>
 
-        {/* View Mode Toggle */}
-        <div className="p-4 border-b border-devin-border">
-          <div className="flex gap-2">
-            <button
-              onClick={() => setViewMode('list')}
-              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-                viewMode === 'list' ? 'bg-devin-teal text-white' : 'bg-devin-card text-devin-muted hover:text-devin-text'
-              }`}
-            >
-              <Layers className="w-4 h-4" />
-              List
-            </button>
-            <button
-              onClick={() => setViewMode('timeline')}
-              className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-                viewMode === 'timeline' ? 'bg-devin-teal text-white' : 'bg-devin-card text-devin-muted hover:text-devin-text'
-              }`}
-            >
-              <GitBranch className="w-4 h-4" />
-              Timeline
-            </button>
+        {/* Navigation */}
+        <nav className="p-3 border-b border-ws-border">
+          <p className="text-[10px] uppercase tracking-wider text-ws-text-muted px-3 py-2">View Mode</p>
+          <button
+            onClick={() => setViewMode('workflow')}
+            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 ${
+              viewMode === 'workflow' ? 'bg-gradient-to-r from-ws-teal/20 to-ws-teal/5 text-ws-text border-l-2 border-ws-teal' : 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50'
+            }`}
+          >
+            <Activity className="w-4 h-4" />
+            Workflow View
+          </button>
+          <button
+            onClick={() => setViewMode('timeline')}
+            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 ${
+              viewMode === 'timeline' ? 'bg-gradient-to-r from-ws-teal/20 to-ws-teal/5 text-ws-text border-l-2 border-ws-teal' : 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50'
+            }`}
+          >
+            <GitBranch className="w-4 h-4" />
+            Timeline View
+          </button>
+          <button
+            onClick={() => setViewMode('list')}
+            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 ${
+              viewMode === 'list' ? 'bg-gradient-to-r from-ws-teal/20 to-ws-teal/5 text-ws-text border-l-2 border-ws-teal' : 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50'
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            List View
+          </button>
+        </nav>
+
+        {/* Session Selector for Workflow View */}
+        {viewMode === 'workflow' && sessions.length > 0 && (
+          <div className="p-3 border-b border-ws-border">
+            <p className="text-[10px] uppercase tracking-wider text-ws-text-muted px-3 py-2">Select Session</p>
+            <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar">
+              {/* Show sessions with prompts first */}
+              {sessions
+                .sort((a, b) => (b.categories?.prompt || 0) - (a.categories?.prompt || 0))
+                .slice(0, 20)
+                .map(session => {
+                  const hasPrompts = (session.categories?.prompt || 0) > 0;
+                  const displayName = formatSessionName(session);
+                  return (
+                    <button
+                      key={session.id}
+                      onClick={() => setSelectedSession(session.id)}
+                      className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-all duration-200 group ${
+                        selectedSession === session.id 
+                          ? 'bg-ws-teal/10 text-ws-teal border border-ws-teal/30' 
+                          : hasPrompts
+                            ? 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50 border border-ws-teal/20'
+                            : 'text-ws-text-muted hover:text-ws-text-secondary hover:bg-ws-card/30 border border-transparent'
+                      }`}
+                    >
+                      <div className="flex flex-col gap-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <span className={`text-xs leading-tight flex-1 ${hasPrompts ? 'font-medium' : 'font-mono'}`}>
+                            {displayName}
+                          </span>
+                          {hasPrompts && (
+                            <span className="text-xs text-ws-teal font-medium whitespace-nowrap">
+                              {session.categories?.prompt} prompts
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 text-[10px] text-ws-text-muted">
+                          <span>{session.event_count} events</span>
+                          {(session.categories?.file_write || 0) > 0 && (
+                            <span>{session.categories?.file_write} changes</span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Stats */}
         {stats && (
-          <div className="p-4 border-b border-devin-border">
-            <h3 className="text-xs font-medium text-devin-muted uppercase tracking-wider mb-3">Statistics</h3>
-            <div className="grid grid-cols-2 gap-2">
-              <StatCard icon={<MessageSquare className="w-4 h-4" />} label="Prompts" value={stats.total_prompts || stats.categories?.prompt || 0} color="blue" />
-              <StatCard icon={<Edit3 className="w-4 h-4" />} label="Code Changes" value={stats.total_file_writes || stats.categories?.file_write || 0} color="green" />
-              <StatCard icon={<Play className="w-4 h-4" />} label="Commands" value={stats.total_commands || stats.categories?.command || 0} color="orange" />
-              <StatCard icon={<User className="w-4 h-4" />} label="Sessions" value={stats.unique_sessions || 0} color="purple" />
+          <div className="p-3 border-b border-ws-border">
+            <p className="text-[10px] uppercase tracking-wider text-ws-text-muted px-3 py-2">Statistics</p>
+            <div className="space-y-1">
+              <StatCard icon={<MessageSquare className="w-4 h-4" />} label="Prompts" value={stats.total_prompts || stats.categories?.prompt || 0} />
+              <StatCard icon={<Edit3 className="w-4 h-4" />} label="Code Changes" value={stats.total_file_writes || stats.categories?.file_write || 0} />
+              <StatCard icon={<Play className="w-4 h-4" />} label="Commands" value={stats.total_commands || stats.categories?.command || 0} />
+              <StatCard icon={<User className="w-4 h-4" />} label="Sessions" value={stats.unique_sessions || 0} />
             </div>
           </div>
         )}
 
         {/* File Selection */}
-        <div className="flex-1 overflow-auto p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-xs font-medium text-devin-muted uppercase tracking-wider">Log Files</h3>
-            <button 
-              onClick={() => fetchFiles(currentDir)}
-              className="p-1 hover:bg-devin-card rounded text-devin-muted hover:text-devin-text transition-colors"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
+        <div className="flex-1 overflow-auto p-3">
+          <div className="px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wider text-ws-text-muted">Log Files</p>
           </div>
           
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {files.map(file => (
               <label 
                 key={file.path}
-                className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${
+                className={`flex items-center gap-2 px-3 py-2 rounded cursor-pointer transition-colors ${
                   selectedFiles.includes(file.path) 
-                    ? 'bg-devin-teal/20 border border-devin-teal/50' 
-                    : 'hover:bg-devin-card border border-transparent'
+                    ? 'bg-ws-card text-ws-text' 
+                    : 'text-ws-text-secondary hover:bg-ws-card/50 hover:text-ws-text'
                 }`}
               >
                 <input
                   type="checkbox"
                   checked={selectedFiles.includes(file.path)}
                   onChange={() => toggleFileSelection(file.path)}
-                  className="w-4 h-4 rounded border-devin-border bg-devin-card text-devin-teal focus:ring-devin-teal focus:ring-offset-0"
+                  className="w-3 h-3 rounded border-ws-border bg-ws-card text-ws-teal focus:ring-ws-teal focus:ring-offset-0"
                 />
-                <FileText className={`w-4 h-4 ${file.type === 'jsonl' ? 'text-devin-teal' : 'text-devin-muted'}`} />
+                <FileText className={`w-4 h-4 ${file.type === 'jsonl' ? 'text-ws-teal' : 'text-ws-text-muted'}`} />
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm text-devin-text truncate">{file.name}</p>
-                  <div className="flex items-center gap-2 text-xs text-devin-muted">
-                    <span>{(file.size / 1024).toFixed(1)} KB</span>
-                    {file.entries > 0 && (
-                      <span className="px-1.5 py-0.5 bg-devin-teal/20 text-devin-teal rounded text-xs font-medium">
-                        {file.entries.toLocaleString()} entries
-                      </span>
-                    )}
-                  </div>
+                  <p className="text-sm truncate">{file.name}</p>
+                  {file.entries > 0 && (
+                    <p className="text-xs text-ws-text-muted">
+                      {file.entries.toLocaleString()} entries
+                    </p>
+                  )}
                 </div>
               </label>
             ))}
           </div>
 
           {files.length === 0 && (
-            <p className="text-sm text-devin-muted text-center py-4">No log files found</p>
+            <p className="text-sm text-ws-text-muted text-center py-4">No log files found</p>
           )}
         </div>
-
-        {/* Directory Picker Button - REMOVED (moved to header) */}
       </aside>
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Header */}
-        <header className="bg-devin-darker border-b border-devin-border p-4">
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="p-2 hover:bg-devin-card rounded-lg text-devin-muted hover:text-devin-text transition-colors"
-            >
-              <BarChart3 className="w-5 h-5" />
-            </button>
-
-            {/* Directory Selector - Moved to header */}
-            <div className="flex items-center gap-2">
+        <header className="bg-ws-bg border-b border-ws-border px-6 py-4">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="p-2 hover:bg-ws-card rounded text-ws-text-muted hover:text-ws-text transition-colors"
+              >
+                <BarChart3 className="w-5 h-5" />
+              </button>
+              <div>
+                <h1 className="text-xl font-semibold text-ws-text">Windsurf Hooks Logger</h1>
+                <p className="text-xs text-ws-text-muted">Analytics Dashboard</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={refreshAll}
+                className="flex items-center gap-2 px-3 py-1.5 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded text-sm text-ws-text-secondary hover:text-ws-text transition-colors"
+                title="Refresh all data"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
               <button
                 onClick={() => setShowFilePicker(true)}
-                className="flex items-center gap-2 px-3 py-1.5 bg-devin-card hover:bg-devin-border rounded-lg text-sm text-devin-text transition-colors"
+                className="flex items-center gap-2 px-3 py-1.5 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded text-sm text-ws-text-secondary hover:text-ws-text transition-colors"
               >
                 <FolderOpen className="w-4 h-4" />
-                <span className="hidden sm:inline">Change Directory</span>
+                <span className="hidden sm:inline">Directory</span>
               </button>
-              <p className="text-xs text-devin-muted max-w-xs truncate" title={currentDir} style={{wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: '1.2'}}>
-                {currentDir}
-              </p>
-            </div>
-
-            {/* Search */}
-            <div className="flex-1 flex items-center gap-2">
-              <div className="relative flex-1 max-w-xl">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-devin-muted" />
-                <input
-                  ref={searchInputRef}
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && searchLogs()}
-                  placeholder="Search logs... (press / to focus)"
-                  className="w-full pl-10 pr-20 py-2 bg-devin-card border border-devin-border rounded-lg text-devin-text placeholder-devin-muted focus:outline-none focus:border-devin-teal focus:ring-1 focus:ring-devin-teal"
-                />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                  <button
-                    onClick={() => setUseRegex(!useRegex)}
-                    className={`p-1 rounded ${useRegex ? 'bg-devin-teal text-white' : 'text-devin-muted hover:text-devin-text'}`}
-                    title="Toggle regex search"
-                  >
-                    <Regex className="w-4 h-4" />
-                  </button>
-                  <span className="text-xs text-devin-muted kbd">/</span>
-                </div>
-              </div>
-              <button
-                onClick={searchLogs}
-                className="px-4 py-2 bg-devin-teal hover:bg-devin-teal-light text-white rounded-lg transition-colors font-medium"
-              >
-                Search
-              </button>
-              <button
-                onClick={() => setShowAdvancedSearch(!showAdvancedSearch)}
-                className={`p-2 rounded-lg transition-colors ${showAdvancedSearch ? 'bg-devin-teal text-white' : 'bg-devin-card text-devin-muted hover:text-devin-text'}`}
-                title="Advanced filters (⌘K)"
-              >
-                <Filter className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Quick Filters */}
-            <div className="flex items-center gap-2">
-              <select
-                value={filterCategory}
-                onChange={(e) => { setFilterCategory(e.target.value); searchLogs(); }}
-                className="px-3 py-2 bg-devin-card border border-devin-border rounded-lg text-devin-text focus:outline-none focus:border-devin-teal"
-              >
-                <option value="all">All Categories</option>
-                <option value="prompt">Prompts</option>
-                <option value="file_read">File Reads</option>
-                <option value="file_write">Code Changes</option>
-                <option value="command">Commands</option>
-                <option value="mcp">MCP Tools</option>
-              </select>
-
-              <select
-                value={filterUser}
-                onChange={(e) => { setFilterUser(e.target.value); searchLogs(); }}
-                className="px-3 py-2 bg-devin-card border border-devin-border rounded-lg text-devin-text focus:outline-none focus:border-devin-teal"
-              >
-                <option value="all">All Users</option>
-                {uniqueUsers.map(user => (
-                  <option key={user} value={user}>{user}</option>
-                ))}
-              </select>
-
-              {/* Export */}
               <div className="relative group">
-                <button className="p-2 bg-devin-card hover:bg-devin-border rounded-lg text-devin-muted hover:text-devin-text transition-colors">
-                  <Download className="w-5 h-5" />
+                <button className="p-2 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded text-ws-text-muted hover:text-ws-text transition-colors">
+                  <Download className="w-4 h-4" />
                 </button>
-                <div className="absolute right-0 top-full mt-1 bg-devin-card border border-devin-border rounded-lg shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10">
+                <div className="absolute right-0 top-full mt-1 bg-ws-card border border-ws-border rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[120px]">
                   <button
                     onClick={() => exportLogs('json')}
-                    className="w-full px-4 py-2 text-left text-sm text-devin-text hover:bg-devin-border rounded-t-lg"
+                    className="w-full px-3 py-2 text-left text-sm text-ws-text-secondary hover:bg-ws-card-hover hover:text-ws-text"
                   >
                     Export JSON
                   </button>
                   <button
                     onClick={() => exportLogs('csv')}
-                    className="w-full px-4 py-2 text-left text-sm text-devin-text hover:bg-devin-border rounded-b-lg"
+                    className="w-full px-3 py-2 text-left text-sm text-ws-text-secondary hover:bg-ws-card-hover hover:text-ws-text"
                   >
                     Export CSV
                   </button>
@@ -511,53 +724,172 @@ function App() {
             </div>
           </div>
 
+          {/* Active Filters Indicator */}
+          {(filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || searchQuery || dateFrom || dateTo) && (
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <span className="text-xs text-ws-text-muted">Active filters:</span>
+              {filterCategory !== 'all' && (
+                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1">
+                  Category: {filterCategory}
+                  <button onClick={() => { setFilterCategory('all'); }} className="hover:text-white"><X className="w-3 h-3" /></button>
+                </span>
+              )}
+              {filterUser !== 'all' && (
+                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1">
+                  User: {filterUser}
+                  <button onClick={() => { setFilterUser('all'); }} className="hover:text-white"><X className="w-3 h-3" /></button>
+                </span>
+              )}
+              {filterSession !== 'all' && (
+                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1">
+                  Session
+                  <button onClick={() => { setFilterSession('all'); }} className="hover:text-white"><X className="w-3 h-3" /></button>
+                </span>
+              )}
+              {searchQuery && (
+                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1">
+                  Search: "{searchQuery.substring(0, 20)}{searchQuery.length > 20 ? '...' : ''}"
+                  <button onClick={() => { setSearchQuery(''); }} className="hover:text-white"><X className="w-3 h-3" /></button>
+                </span>
+              )}
+              {(dateFrom || dateTo) && (
+                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1">
+                  Date range
+                  <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="hover:text-white"><X className="w-3 h-3" /></button>
+                </span>
+              )}
+              <button
+                onClick={() => {
+                  setFilterCategory('all');
+                  setFilterUser('all');
+                  setFilterSession('all');
+                  setDateFrom('');
+                  setDateTo('');
+                  setSearchQuery('');
+                  setUseRegex(false);
+                }}
+                className="text-xs text-ws-text-muted hover:text-ws-text underline"
+              >
+                Clear all
+              </button>
+            </div>
+          )}
+
+          {/* Search and Filters Row */}
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1 max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ws-text-muted" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && (useRegex ? searchLogs() : fetchLogs())}
+                placeholder="Search logs..."
+                className="w-full pl-10 pr-10 py-2 bg-ws-card border border-ws-border rounded text-ws-text placeholder-ws-text-muted text-sm focus:outline-none focus:border-ws-teal"
+              />
+              <button
+                onClick={() => setUseRegex(!useRegex)}
+                className={`absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded ${useRegex ? 'text-ws-teal' : 'text-ws-text-muted hover:text-ws-text'}`}
+                title="Toggle regex"
+              >
+                <Regex className="w-3 h-3" />
+              </button>
+            </div>
+
+            <select
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+              className="px-3 py-2 bg-ws-card border border-ws-border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal"
+            >
+              <option value="all">All Categories</option>
+              <option value="prompt">Prompts</option>
+              <option value="file_read">File Reads</option>
+              <option value="file_write">Code Changes</option>
+              <option value="command">Commands</option>
+              <option value="mcp">MCP Tools</option>
+            </select>
+
+            <select
+              value={filterUser}
+              onChange={(e) => setFilterUser(e.target.value)}
+              className="px-3 py-2 bg-ws-card border border-ws-border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal"
+            >
+              <option value="all">All Users</option>
+              {uniqueUsers.map(user => (
+                <option key={user} value={user}>{user}</option>
+              ))}
+            </select>
+
+            <button
+              onClick={() => useRegex ? searchLogs() : fetchLogs()}
+              className="px-4 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm font-medium transition-colors"
+            >
+              Search
+            </button>
+
+            <button
+              onClick={() => setShowAdvancedSearch(!showAdvancedSearch)}
+              className={`p-2 rounded transition-colors ${showAdvancedSearch ? 'bg-ws-teal text-white' : 'bg-ws-card border border-ws-border text-ws-text-muted hover:text-ws-text'}`}
+              title="Advanced filters (⌘K)"
+            >
+              <Filter className="w-4 h-4" />
+            </button>
+          </div>
+
           {/* Advanced Search Panel */}
           {showAdvancedSearch && (
-            <div className="mt-4 p-4 bg-devin-card rounded-lg border border-devin-border slide-up">
+            <div className="mt-4 p-4 bg-ws-card rounded border border-ws-border slide-up">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-medium text-devin-text">Advanced Filters</h3>
-                <button onClick={() => setShowAdvancedSearch(false)} className="text-devin-muted hover:text-devin-text">
+                <h3 className="text-sm font-medium text-ws-text">Advanced Filters</h3>
+                <button onClick={() => setShowAdvancedSearch(false)} className="text-ws-text-muted hover:text-ws-text">
                   <X className="w-4 h-4" />
                 </button>
               </div>
               <div className="grid grid-cols-4 gap-4">
                 <div>
-                  <label className="block text-xs text-devin-muted mb-1">Session</label>
+                  <label className="block text-xs text-ws-text-muted mb-1">Session</label>
                   <select
                     value={filterSession}
                     onChange={(e) => setFilterSession(e.target.value)}
-                    className="w-full px-3 py-2 bg-devin-darker border border-devin-border rounded-lg text-devin-text text-sm focus:outline-none focus:border-devin-teal"
+                    className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal"
                   >
                     <option value="all">All Sessions</option>
-                    {uniqueSessions.map(session => (
-                      <option key={session} value={session}>{session.substring(0, 20)}...</option>
-                    ))}
+                    {uniqueSessions.map(session => {
+                      const sessionData = sessions.find(s => s.id === session);
+                      const displayName = sessionData ? formatSessionName(sessionData) : session;
+                      return (
+                        <option key={session} value={session}>
+                          {displayName.length > 30 ? `${displayName.substring(0, 30)}...` : displayName}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-devin-muted mb-1">From Date</label>
+                  <label className="block text-xs text-ws-text-muted mb-1">From Date</label>
                   <input
                     type="datetime-local"
                     value={dateFrom}
                     onChange={(e) => setDateFrom(e.target.value)}
-                    className="w-full px-3 py-2 bg-devin-darker border border-devin-border rounded-lg text-devin-text text-sm focus:outline-none focus:border-devin-teal"
+                    className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-devin-muted mb-1">To Date</label>
+                  <label className="block text-xs text-ws-text-muted mb-1">To Date</label>
                   <input
                     type="datetime-local"
                     value={dateTo}
                     onChange={(e) => setDateTo(e.target.value)}
-                    className="w-full px-3 py-2 bg-devin-darker border border-devin-border rounded-lg text-devin-text text-sm focus:outline-none focus:border-devin-teal"
+                    className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal"
                   />
                 </div>
                 <div className="flex items-end gap-2">
                   <button
-                    onClick={searchLogs}
-                    className="flex-1 px-4 py-2 bg-devin-teal hover:bg-devin-teal-light text-white rounded-lg text-sm transition-colors"
+                    onClick={() => useRegex ? searchLogs() : fetchLogs()}
+                    className="flex-1 px-4 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm transition-colors"
                   >
-                    Apply Filters
+                    Apply
                   </button>
                   <button
                     onClick={() => {
@@ -568,19 +900,20 @@ function App() {
                       setDateTo('');
                       setUseRegex(false);
                       setSearchQuery('');
+                      // Trigger refetch after clearing filters
+                      setTimeout(() => fetchLogs(), 0);
                     }}
-                    className="px-4 py-2 bg-devin-darker text-devin-muted hover:text-devin-text rounded-lg text-sm transition-colors"
+                    className="px-4 py-2 bg-ws-bg border border-ws-border text-ws-text-muted hover:text-ws-text rounded text-sm transition-colors"
                   >
                     Clear
                   </button>
                 </div>
               </div>
-              <div className="mt-3 flex items-center gap-4 text-xs text-devin-muted">
-                <span>Keyboard shortcuts:</span>
-                <span><span className="kbd">/</span> Focus search</span>
-                <span><span className="kbd">⌘K</span> Toggle filters</span>
+              <div className="mt-3 flex items-center gap-4 text-xs text-ws-text-muted">
+                <span>Shortcuts:</span>
+                <span><span className="kbd">/</span> Search</span>
+                <span><span className="kbd">⌘K</span> Filters</span>
                 <span><span className="kbd">↑↓</span> Navigate</span>
-                <span><span className="kbd">Enter</span> Expand</span>
                 <span><span className="kbd">Esc</span> Close</span>
               </div>
             </div>
@@ -588,11 +921,37 @@ function App() {
         </header>
 
         {/* Log Entries */}
-        <div ref={logContainerRef} className="flex-1 overflow-auto p-4">
+        <div ref={logContainerRef} className="flex-1 overflow-auto p-6">
           {loading ? (
             <LoadingSkeleton />
+          ) : viewMode === 'workflow' ? (
+            <WorkflowView
+              selectedSession={selectedSession}
+              sessions={sessions}
+              workflowGroups={workflowGroups}
+              expandedGroups={workflowExpandedGroups}
+              toggleGroup={toggleWorkflowGroup}
+              expandedEntries={expandedEntries}
+              toggleEntry={toggleEntry}
+              formatTimestamp={formatTimestamp}
+              truncateContent={truncateContent}
+              copyToClipboard={copyToClipboard}
+              onSelectSession={setSelectedSession}
+            />
           ) : filteredLogs.length === 0 ? (
-            <EmptyState />
+            <EmptyState 
+              hasFilters={filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || searchQuery || dateFrom || dateTo}
+              onClearFilters={() => {
+                setFilterCategory('all');
+                setFilterUser('all');
+                setFilterSession('all');
+                setDateFrom('');
+                setDateTo('');
+                setSearchQuery('');
+                setUseRegex(false);
+                setTimeout(() => fetchLogs(), 0);
+              }}
+            />
           ) : viewMode === 'timeline' ? (
             <TimelineView
               sessions={sessions}
@@ -621,9 +980,17 @@ function App() {
         </div>
 
         {/* Footer */}
-        <footer className="bg-devin-darker border-t border-devin-border px-4 py-2 flex items-center justify-between text-sm text-devin-muted">
-          <span>{filteredLogs.length} entries</span>
-          <span>Last updated: {new Date().toLocaleTimeString()}</span>
+        <footer className="bg-ws-sidebar border-t border-ws-border px-6 py-2 flex items-center justify-between text-xs text-ws-text-muted">
+          <span>
+            {filteredLogs.length} {filteredLogs.length === 1 ? 'entry' : 'entries'}
+            {(filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || searchQuery || dateFrom || dateTo) && (
+              <span className="text-ws-teal ml-1">(filtered)</span>
+            )}
+          </span>
+          <div className="flex items-center gap-4">
+            <span>View: {viewMode === 'workflow' ? 'Workflow' : viewMode === 'timeline' ? 'Timeline' : 'List'}</span>
+            <span>Last updated: {new Date().toLocaleTimeString()}</span>
+          </div>
         </footer>
       </main>
 
@@ -643,23 +1010,14 @@ function App() {
   );
 }
 
-function StatCard({ icon, label, value, color = 'teal' }) {
-  const colorClasses = {
-    teal: 'text-devin-teal bg-devin-teal/10',
-    blue: 'text-blue-400 bg-blue-500/10',
-    green: 'text-green-400 bg-green-500/10',
-    orange: 'text-orange-400 bg-orange-500/10',
-    purple: 'text-purple-400 bg-purple-500/10',
-    yellow: 'text-yellow-400 bg-yellow-500/10',
-  };
-  
+function StatCard({ icon, label, value }) {
   return (
-    <div className={`rounded-lg p-3 ${colorClasses[color] || colorClasses.teal}`}>
-      <div className="flex items-center gap-2 mb-1">
-        {icon}
-        <span className="text-xs opacity-70">{label}</span>
+    <div className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-ws-card/50 hover:bg-ws-card transition-all duration-200 group">
+      <div className="flex items-center gap-2.5 text-ws-text-secondary">
+        <span className="text-ws-teal group-hover:scale-110 transition-transform">{icon}</span>
+        <span className="text-sm">{label}</span>
       </div>
-      <p className="text-lg font-semibold">{value || 0}</p>
+      <span className="text-sm font-semibold text-ws-text stat-number">{value || 0}</span>
     </div>
   );
 }
@@ -668,14 +1026,14 @@ function LoadingSkeleton() {
   return (
     <div className="space-y-3">
       {[1, 2, 3, 4, 5].map(i => (
-        <div key={i} className="bg-devin-card border border-devin-border rounded-xl p-4">
+        <div key={i} className="bg-ws-card border border-ws-border rounded-lg p-4" style={{ animationDelay: `${i * 100}ms` }}>
           <div className="flex items-center gap-4">
             <div className="w-10 h-10 rounded-lg skeleton" />
             <div className="flex-1">
-              <div className="h-4 w-24 rounded skeleton mb-2" />
-              <div className="h-3 w-48 rounded skeleton" />
+              <div className="h-4 w-28 rounded skeleton mb-2" />
+              <div className="h-3 w-56 rounded skeleton" />
             </div>
-            <div className="h-4 w-32 rounded skeleton" />
+            <div className="h-4 w-36 rounded skeleton" />
           </div>
         </div>
       ))}
@@ -683,19 +1041,27 @@ function LoadingSkeleton() {
   );
 }
 
-function EmptyState() {
+function EmptyState({ hasFilters, onClearFilters }) {
   return (
-    <div className="flex flex-col items-center justify-center h-64 text-devin-muted slide-up">
-      <div className="w-20 h-20 rounded-full bg-devin-card flex items-center justify-center mb-4">
-        <FileText className="w-10 h-10 opacity-50" />
+    <div className="flex flex-col items-center justify-center h-64 text-ws-text-muted slide-up">
+      <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-ws-card to-ws-bg border border-ws-border flex items-center justify-center mb-6 shadow-lg">
+        <FileText className="w-10 h-10 text-ws-text-muted" />
       </div>
-      <p className="text-lg font-medium text-devin-text">No log entries found</p>
-      <p className="text-sm mt-2 text-center max-w-md">
-        Select log files from the sidebar, adjust your filters, or wait for Cascade to generate new events.
+      <p className="text-lg font-semibold text-ws-text mb-2">No log entries found</p>
+      <p className="text-sm text-center max-w-md text-ws-text-secondary leading-relaxed mb-4">
+        {hasFilters 
+          ? 'No entries match your current filters. Try adjusting or clearing them.'
+          : 'Select log files from the sidebar or adjust your filters to see your Cascade activity.'
+        }
       </p>
-      <div className="mt-4 flex gap-2 text-xs">
-        <span className="px-2 py-1 bg-devin-card rounded">Tip: Press <span className="kbd">/</span> to search</span>
-      </div>
+      {hasFilters && onClearFilters && (
+        <button
+          onClick={onClearFilters}
+          className="px-4 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm transition-colors"
+        >
+          Clear All Filters
+        </button>
+      )}
     </div>
   );
 }
@@ -706,10 +1072,10 @@ function ToastContainer({ toasts }) {
       {toasts.map(toast => (
         <div
           key={toast.id}
-          className={`px-4 py-3 rounded-lg shadow-lg toast-enter flex items-center gap-2 ${
+          className={`px-4 py-3 rounded shadow-lg toast-enter flex items-center gap-2 ${
             toast.type === 'error' ? 'bg-red-500/90 text-white' :
-            toast.type === 'success' ? 'bg-green-500/90 text-white' :
-            'bg-devin-card text-devin-text border border-devin-border'
+            toast.type === 'success' ? 'bg-ws-teal/90 text-white' :
+            'bg-ws-card text-ws-text border border-ws-border'
           }`}
         >
           {toast.type === 'success' && <Check className="w-4 h-4" />}
@@ -723,26 +1089,26 @@ function ToastContainer({ toasts }) {
 
 function TimelineView({ sessions, expandedEntries, toggleEntry, formatTimestamp, truncateContent, copyToClipboard }) {
   if (!sessions || sessions.length === 0) {
-    return <EmptyState />;
+    return <EmptyState hasFilters={false} />;
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {sessions.slice(0, 10).map(session => (
-        <div key={session.id} className="bg-devin-card border border-devin-border rounded-xl overflow-hidden slide-in">
+        <div key={session.id} className="bg-ws-card border border-ws-border rounded overflow-hidden slide-in">
           {/* Session Header */}
-          <div className="p-4 border-b border-devin-border bg-devin-darker/50">
+          <div className="p-4 border-b border-ws-border bg-ws-sidebar">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-lg bg-devin-teal/20 flex items-center justify-center">
-                  <History className="w-5 h-5 text-devin-teal" />
+                <div className="w-8 h-8 rounded bg-ws-teal/10 flex items-center justify-center">
+                  <History className="w-4 h-4 text-ws-teal" />
                 </div>
                 <div>
-                  <h3 className="font-medium text-devin-text">Session</h3>
-                  <p className="text-xs text-devin-muted font-mono">{session.id.substring(0, 32)}...</p>
+                  <h3 className="font-medium text-ws-text text-sm">Session</h3>
+                  <p className="text-xs text-ws-text-muted font-mono">{session.id.substring(0, 24)}...</p>
                 </div>
               </div>
-              <div className="flex items-center gap-4 text-sm text-devin-muted">
+              <div className="flex items-center gap-4 text-xs text-ws-text-muted">
                 <span>{session.event_count} events</span>
                 <span>{formatTimestamp(session.start_time)}</span>
               </div>
@@ -775,7 +1141,7 @@ function TimelineView({ sessions, expandedEntries, toggleEntry, formatTimestamp,
               />
             ))}
             {session.events.length > 20 && (
-              <p className="text-xs text-devin-muted text-center mt-4">
+              <p className="text-xs text-ws-text-muted text-center mt-4">
                 +{session.events.length - 20} more events
               </p>
             )}
@@ -792,24 +1158,24 @@ function TimelineEvent({ event, isExpanded, onToggle, formatTimestamp, truncateC
   const Icon = config.icon;
 
   return (
-    <div className={`relative pl-12 ${isLast ? '' : 'pb-4'}`}>
+    <div className={`relative pl-10 ${isLast ? '' : 'pb-3'}`}>
       {/* Timeline Dot */}
-      <div className={`absolute left-3 top-1 w-6 h-6 rounded-full ${config.bgClass} flex items-center justify-center z-10`}>
-        <Icon className={`w-3 h-3 ${config.textClass}`} />
+      <div className={`absolute left-3 top-1 w-5 h-5 rounded-full ${config.bgClass} flex items-center justify-center z-10`}>
+        <Icon className={`w-2.5 h-2.5 ${config.textClass}`} />
       </div>
       
       {/* Event Card */}
       <div 
-        className="bg-devin-darker rounded-lg p-3 cursor-pointer hover:bg-devin-border/30 transition-colors"
+        className="bg-ws-bg rounded p-3 cursor-pointer hover:bg-ws-card-hover border border-ws-border transition-colors"
         onClick={onToggle}
       >
         <div className="flex items-center justify-between mb-1">
           <span className={`px-2 py-0.5 rounded text-xs ${config.bgClass} ${config.textClass}`}>
             {config.label}
           </span>
-          <span className="text-xs text-devin-muted">{formatTimestamp(event.timestamp)}</span>
+          <span className="text-xs text-ws-text-muted">{formatTimestamp(event.timestamp)}</span>
         </div>
-        <p className="text-sm text-devin-text">
+        <p className="text-sm text-ws-text-secondary">
           {getEventSummary(event, truncateContent)}
         </p>
         
@@ -817,6 +1183,384 @@ function TimelineEvent({ event, isExpanded, onToggle, formatTimestamp, truncateC
           <ExpandedEventContent event={event} copyToClipboard={copyToClipboard} />
         )}
       </div>
+    </div>
+  );
+}
+
+function WorkflowView({ 
+  selectedSession, 
+  sessions, 
+  workflowGroups, 
+  expandedGroups, 
+  toggleGroup,
+  expandedEntries,
+  toggleEntry,
+  formatTimestamp, 
+  truncateContent, 
+  copyToClipboard,
+  onSelectSession 
+}) {
+  // Find sessions with prompts for quick access
+  const sessionsWithPrompts = sessions.filter(s => s.categories?.prompt > 0);
+  
+  if (!selectedSession) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 text-ws-text-muted">
+        <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-ws-teal/20 to-ws-card border border-ws-border flex items-center justify-center mb-6">
+          <Activity className="w-10 h-10 text-ws-teal" />
+        </div>
+        <h3 className="text-xl font-semibold text-ws-text mb-2">Select a Session</h3>
+        <p className="text-sm text-ws-text-secondary text-center max-w-md mb-6">
+          Choose a session from the sidebar to view the workflow of prompts and their resulting code changes.
+        </p>
+        {sessionsWithPrompts.length > 0 ? (
+          <div className="flex flex-wrap gap-2 justify-center max-w-lg">
+            {sessionsWithPrompts.slice(0, 5).map(session => (
+              <button
+                key={session.id}
+                onClick={() => onSelectSession(session.id)}
+                className="px-4 py-2 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded-lg text-sm text-ws-text-secondary hover:text-ws-text transition-all duration-200 hover:border-ws-teal/50"
+              >
+                <span className="font-mono text-xs">{session.id === 'no_session' ? 'Ungrouped' : session.id.substring(0, 8) + '...'}</span>
+                <span className="ml-2 text-ws-teal">({session.categories?.prompt || 0} prompts)</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-ws-text-muted">No sessions with prompts found</p>
+        )}
+      </div>
+    );
+  }
+
+  const currentSession = sessions.find(s => s.id === selectedSession);
+  const hasPrompts = currentSession?.categories?.prompt > 0;
+
+  // Show message if session has no prompts
+  if (!hasPrompts && workflowGroups.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div className="bg-gradient-to-r from-ws-card to-ws-bg border border-ws-border rounded-xl p-6">
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-12 h-12 rounded-xl bg-ws-orange/10 flex items-center justify-center">
+              <Activity className="w-6 h-6 text-ws-orange" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-ws-text">Session: {selectedSession === 'no_session' ? 'Ungrouped Events' : selectedSession.substring(0, 16) + '...'}</h2>
+              <p className="text-sm text-ws-text-muted">{currentSession?.event_count || 0} events (no prompts)</p>
+            </div>
+          </div>
+          <div className="bg-ws-bg/50 rounded-lg p-4 border border-ws-border">
+            <p className="text-sm text-ws-text-secondary mb-3">
+              This session contains {currentSession?.categories?.file_write || 0} code changes, {currentSession?.categories?.command || 0} commands, and {currentSession?.categories?.file_read || 0} file reads, but no prompts were logged with this session ID.
+            </p>
+            <p className="text-xs text-ws-text-muted mb-4">
+              Prompts are typically logged separately. Try selecting <strong className="text-ws-teal">"Ungrouped"</strong> to see prompts without a session ID.
+            </p>
+            {sessionsWithPrompts.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                <span className="text-xs text-ws-text-muted">Sessions with prompts:</span>
+                {sessionsWithPrompts.slice(0, 3).map(s => (
+                  <button
+                    key={s.id}
+                    onClick={() => onSelectSession(s.id)}
+                    className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded hover:bg-ws-teal/20 transition-colors"
+                  >
+                    {s.id === 'no_session' ? 'Ungrouped' : s.id.substring(0, 8) + '...'} ({s.categories?.prompt} prompts)
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Session Header */}
+      <div className="bg-gradient-to-r from-ws-card to-ws-bg border border-ws-border rounded-xl p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-ws-teal/10 flex items-center justify-center">
+              <Activity className="w-6 h-6 text-ws-teal" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-ws-text">Session Workflow</h2>
+              <p className="text-sm text-ws-text-muted font-mono">
+                {selectedSession === 'no_session' ? 'Ungrouped Prompts' : selectedSession.substring(0, 24) + '...'}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-6 text-sm">
+            <div className="text-center">
+              <p className="text-2xl font-bold text-ws-teal">{workflowGroups.filter(g => g.prompt).length}</p>
+              <p className="text-xs text-ws-text-muted">Prompts</p>
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-ws-orange">{currentSession?.categories?.file_write || 0}</p>
+              <p className="text-xs text-ws-text-muted">Code Changes</p>
+            </div>
+            <div className="text-center">
+              <p className="text-2xl font-bold text-ws-text">{currentSession?.event_count || 0}</p>
+              <p className="text-xs text-ws-text-muted">Total Events</p>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-ws-text-muted">
+          <Calendar className="w-3.5 h-3.5" />
+          <span>{formatTimestamp(currentSession?.start_time)} — {formatTimestamp(currentSession?.end_time)}</span>
+        </div>
+      </div>
+
+      {/* Workflow Groups */}
+      <div className="space-y-4">
+        {workflowGroups.map((group, groupIdx) => (
+          <WorkflowGroup
+            key={group.id}
+            group={group}
+            groupIndex={groupIdx}
+            isExpanded={expandedGroups.has(group.id)}
+            onToggle={() => toggleGroup(group.id)}
+            expandedEntries={expandedEntries}
+            toggleEntry={toggleEntry}
+            formatTimestamp={formatTimestamp}
+            truncateContent={truncateContent}
+            copyToClipboard={copyToClipboard}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function getPromptTitle(promptText, maxLength = 60) {
+  if (!promptText) return 'User prompt';
+  // Get the first line, trimmed
+  const firstLine = promptText.split('\n')[0].trim();
+  // If the first line is short enough, use it
+  if (firstLine.length <= maxLength) return firstLine;
+  // Otherwise truncate at word boundary
+  const truncated = firstLine.substring(0, maxLength);
+  const lastSpace = truncated.lastIndexOf(' ');
+  return (lastSpace > 20 ? truncated.substring(0, lastSpace) : truncated) + '...';
+}
+
+function WorkflowGroup({ 
+  group, 
+  groupIndex,
+  isExpanded, 
+  onToggle, 
+  expandedEntries,
+  toggleEntry,
+  formatTimestamp, 
+  truncateContent, 
+  copyToClipboard 
+}) {
+  const fileWrites = group.actions.filter(a => (a.category || a.type) === 'file_write');
+  const commands = group.actions.filter(a => (a.category || a.type) === 'command');
+  const fileReads = group.actions.filter(a => (a.category || a.type) === 'file_read');
+  const mcpCalls = group.actions.filter(a => (a.category || a.type) === 'mcp');
+  const promptData = group.prompt?.data || {};
+  
+  // Extract title from prompt content
+  const promptText = promptData.user_prompt || group.prompt?.content || '';
+  const promptTitle = group.prompt ? getPromptTitle(promptText) : 'Pre-session actions';
+  const isMultiLine = promptText.includes('\n') || promptText.length > 60;
+
+  return (
+    <div className="workflow-group bg-ws-card border border-ws-border rounded-xl overflow-hidden transition-all duration-300 hover:border-ws-border-light">
+      {/* Prompt Section */}
+      <div 
+        className="p-5 cursor-pointer hover:bg-ws-card-hover transition-colors"
+        onClick={onToggle}
+      >
+        <div className="flex items-start gap-4">
+          <div className="flex flex-col items-center">
+            <div className="w-10 h-10 rounded-xl bg-ws-teal/10 flex items-center justify-center">
+              <MessageSquare className="w-5 h-5 text-ws-teal" />
+            </div>
+            {(group.actions.length > 0 || isMultiLine) && (
+              <div className="w-0.5 h-8 bg-gradient-to-b from-ws-teal/50 to-ws-border mt-2" />
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-3 mb-2">
+              <span className="text-xs font-medium text-ws-teal bg-ws-teal/10 px-2.5 py-1 rounded-full">
+                Step {groupIndex + 1}
+              </span>
+              <span className="text-xs text-ws-text-muted">
+                {formatTimestamp(group.prompt?.timestamp)}
+              </span>
+            </div>
+            <h3 className="text-ws-text font-medium leading-relaxed whitespace-pre-wrap">
+              {promptText}
+            </h3>
+          </div>
+          <div className="flex items-center gap-2">
+            {fileWrites.length > 0 && (
+              <span className="flex items-center gap-1.5 px-2.5 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full">
+                <Edit3 className="w-3 h-3" />
+                {fileWrites.length}
+              </span>
+            )}
+            {commands.length > 0 && (
+              <span className="flex items-center gap-1.5 px-2.5 py-1 bg-ws-orange/10 text-ws-orange text-xs rounded-full">
+                <Play className="w-3 h-3" />
+                {commands.length}
+              </span>
+            )}
+            {isExpanded ? (
+              <ChevronDown className="w-5 h-5 text-ws-text-muted" />
+            ) : (
+              <ChevronRight className="w-5 h-5 text-ws-text-muted" />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Expanded Content */}
+      {isExpanded && (
+        <div className="border-t border-ws-border bg-ws-bg/50">
+          {/* Full Prompt Text */}
+          {group.prompt && (
+            <div className="p-5 border-b border-ws-border">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4 text-ws-teal" />
+                  <h4 className="text-sm font-medium text-ws-text">Full Prompt</h4>
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); copyToClipboard(promptData.user_prompt || group.prompt.content || ''); }}
+                  className="text-xs text-ws-text-muted hover:text-ws-text flex items-center gap-1"
+                >
+                  <Copy className="w-3 h-3" /> Copy
+                </button>
+              </div>
+              <pre className="bg-ws-card rounded-lg p-4 text-sm text-ws-text-secondary whitespace-pre-wrap border border-ws-border max-h-64 overflow-auto">
+                {promptData.user_prompt || group.prompt.content || 'No prompt content'}
+              </pre>
+            </div>
+          )}
+
+          {/* Code Changes Section */}
+          {fileWrites.length > 0 && (
+            <div className="p-5 border-b border-ws-border">
+              <div className="flex items-center gap-2 mb-4">
+                <Edit3 className="w-4 h-4 text-ws-teal" />
+                <h4 className="text-sm font-medium text-ws-text">Code Changes</h4>
+                <span className="text-xs text-ws-text-muted">({fileWrites.length} files)</span>
+              </div>
+              <div className="space-y-3">
+                {fileWrites.map((fw, idx) => (
+                  <WorkflowFileChange
+                    key={fw.event_id || idx}
+                    event={fw}
+                    isExpanded={expandedEntries.has(fw.event_id || `fw-${idx}`)}
+                    onToggle={() => toggleEntry(fw.event_id || `fw-${idx}`)}
+                    copyToClipboard={copyToClipboard}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Commands Section */}
+          {commands.length > 0 && (
+            <div className="p-5 border-b border-ws-border">
+              <div className="flex items-center gap-2 mb-4">
+                <Play className="w-4 h-4 text-ws-orange" />
+                <h4 className="text-sm font-medium text-ws-text">Commands Executed</h4>
+              </div>
+              <div className="space-y-2">
+                {commands.map((cmd, idx) => (
+                  <div key={cmd.event_id || idx} className="bg-ws-card rounded-lg p-3 font-mono text-sm border border-ws-border">
+                    <span className="text-ws-orange">$</span>{' '}
+                    <span className="text-ws-text-secondary">{cmd.data?.command_line || 'command'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* File Reads Section */}
+          {fileReads.length > 0 && (
+            <div className="p-5 border-b border-ws-border">
+              <div className="flex items-center gap-2 mb-3">
+                <Eye className="w-4 h-4 text-ws-orange" />
+                <h4 className="text-sm font-medium text-ws-text">Files Read</h4>
+                <span className="text-xs text-ws-text-muted">({fileReads.length})</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {fileReads.map((fr, idx) => (
+                  <span key={fr.event_id || idx} className="px-2.5 py-1 bg-ws-card text-ws-text-secondary text-xs rounded border border-ws-border font-mono">
+                    {(fr.data?.file_path || 'file').split('/').pop()}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* MCP Calls Section */}
+          {mcpCalls.length > 0 && (
+            <div className="p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <Zap className="w-4 h-4 text-ws-teal" />
+                <h4 className="text-sm font-medium text-ws-text">MCP Tool Calls</h4>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {mcpCalls.map((mcp, idx) => (
+                  <span key={mcp.event_id || idx} className="px-2.5 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full">
+                    {mcp.data?.mcp_full_tool || mcp.data?.mcp_tool_name || 'tool'}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkflowFileChange({ event, isExpanded, onToggle, copyToClipboard }) {
+  const data = event.data || {};
+  const hasEdits = data.edits && data.edits.length > 0;
+  const fileName = (data.file_path || 'unknown').split('/').pop();
+  const filePath = data.file_path || 'unknown file';
+
+  return (
+    <div className="bg-ws-card rounded-lg border border-ws-border overflow-hidden">
+      <div 
+        className="flex items-center gap-3 p-3 cursor-pointer hover:bg-ws-card-hover transition-colors"
+        onClick={onToggle}
+      >
+        <FileCode className="w-4 h-4 text-ws-teal" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm text-ws-text font-medium">{fileName}</p>
+          <p className="text-xs text-ws-text-muted truncate">{filePath}</p>
+        </div>
+        <div className="flex items-center gap-3">
+          {data.total_lines_added !== undefined && (
+            <span className="text-xs text-ws-teal">+{data.total_lines_added}</span>
+          )}
+          {data.total_lines_removed !== undefined && (
+            <span className="text-xs text-red-400">-{data.total_lines_removed}</span>
+          )}
+          {isExpanded ? (
+            <ChevronDown className="w-4 h-4 text-ws-text-muted" />
+          ) : (
+            <ChevronRight className="w-4 h-4 text-ws-text-muted" />
+          )}
+        </div>
+      </div>
+
+      {isExpanded && hasEdits && (
+        <div className="border-t border-ws-border p-3 bg-ws-bg">
+          <DiffViewer edits={data.edits} copyToClipboard={copyToClipboard} />
+        </div>
+      )}
     </div>
   );
 }
@@ -852,65 +1596,60 @@ function LogEntry({ entry, isExpanded, onToggle, formatTimestamp, truncateConten
   const hasCodeBlocks = entry.code_blocks && entry.code_blocks.length > 0;
 
   const borderColors = {
-    prompt: 'border-l-blue-500',
-    file_read: 'border-l-yellow-500',
-    file_write: 'border-l-green-500',
-    command: 'border-l-orange-500',
-    mcp: 'border-l-purple-500',
-    response: 'border-l-teal-500',
-    unknown: 'border-l-gray-500'
+    prompt: 'border-l-ws-teal',
+    file_read: 'border-l-ws-orange',
+    file_write: 'border-l-ws-teal',
+    command: 'border-l-ws-orange',
+    mcp: 'border-l-ws-teal',
+    response: 'border-l-ws-teal',
+    unknown: 'border-l-ws-text-muted'
   };
 
   return (
-    <div className={`bg-devin-card border border-devin-border rounded-xl overflow-hidden fade-in border-l-4 ${borderColors[category] || borderColors.unknown} ${isSelected ? 'ring-2 ring-devin-teal' : ''}`}>
+    <div className={`bg-ws-card border border-ws-border rounded overflow-hidden fade-in border-l-2 ${borderColors[category] || borderColors.unknown} ${isSelected ? 'ring-1 ring-ws-teal' : ''}`}>
       {/* Header */}
       <div 
-        className="flex items-center gap-4 p-4 cursor-pointer hover:bg-devin-border/30 transition-colors"
+        className="flex items-center gap-3 p-3 cursor-pointer hover:bg-ws-card-hover transition-colors"
         onClick={onToggle}
       >
-        <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${config.bgClass}`}>
-          <Icon className={`w-5 h-5 ${config.textClass}`} />
+        <div className={`w-8 h-8 rounded flex items-center justify-center ${config.bgClass}`}>
+          <Icon className={`w-4 h-4 ${config.textClass}`} />
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span className={`px-2 py-0.5 rounded text-xs font-medium ${config.bgClass} ${config.textClass}`}>
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className={`px-2 py-0.5 rounded text-xs ${config.bgClass} ${config.textClass}`}>
               {config.label}
             </span>
-            {entry.phase && (
-              <span className="px-2 py-0.5 rounded text-xs bg-devin-border text-devin-muted">
-                {entry.phase}
-              </span>
-            )}
             {hasEdits && (
-              <span className="px-2 py-0.5 rounded text-xs bg-green-500/20 text-green-400">
+              <span className="px-2 py-0.5 rounded text-xs bg-ws-teal/10 text-ws-teal">
                 {data.edit_count} edits
               </span>
             )}
             {hasCodeBlocks && (
-              <span className="px-2 py-0.5 rounded text-xs bg-purple-500/20 text-purple-400">
-                {entry.code_block_count} code blocks
+              <span className="px-2 py-0.5 rounded text-xs bg-ws-teal/10 text-ws-teal">
+                {entry.code_block_count} blocks
               </span>
             )}
           </div>
-          <p className="text-sm text-devin-text truncate">
+          <p className="text-sm text-ws-text-secondary truncate">
             {getEventSummary(entry, truncateContent)}
           </p>
         </div>
 
-        <div className="flex items-center gap-4 text-sm text-devin-muted">
+        <div className="flex items-center gap-3 text-xs text-ws-text-muted">
           <div className="flex items-center gap-1">
-            <User className="w-4 h-4" />
+            <User className="w-3 h-3" />
             <span>{entry.user || 'Unknown'}</span>
           </div>
           <div className="flex items-center gap-1">
-            <Clock className="w-4 h-4" />
+            <Clock className="w-3 h-3" />
             <span>{formatTimestamp(entry.timestamp)}</span>
           </div>
           {isExpanded ? (
-            <ChevronDown className="w-5 h-5" />
+            <ChevronDown className="w-4 h-4" />
           ) : (
-            <ChevronRight className="w-5 h-5" />
+            <ChevronRight className="w-4 h-4" />
           )}
         </div>
       </div>
@@ -931,93 +1670,95 @@ function ExpandedEventContent({ event, entry, copyToClipboard }) {
   const hasCodeBlocks = item.code_blocks && item.code_blocks.length > 0;
 
   return (
-    <div className="border-t border-devin-border slide-up">
+    <div className="border-t border-ws-border slide-up">
       {/* Main Content based on category */}
       {category === 'prompt' && (
-        <div className="p-4">
+        <div className="p-3">
           <div className="flex items-center justify-between mb-2">
-            <h4 className="text-xs font-medium text-devin-muted uppercase tracking-wider">Prompt</h4>
+            <h4 className="text-xs text-ws-text-muted uppercase tracking-wider">Prompt</h4>
             <button
               onClick={(e) => { e.stopPropagation(); copyToClipboard(data.user_prompt || item.content || ''); }}
-              className="text-xs text-devin-muted hover:text-devin-text flex items-center gap-1"
+              className="text-xs text-ws-text-muted hover:text-ws-text flex items-center gap-1"
             >
               <Copy className="w-3 h-3" /> Copy
             </button>
           </div>
-          <pre className="bg-devin-darker rounded-lg p-4 text-sm text-devin-text overflow-auto max-h-96 whitespace-pre-wrap">
+          <pre className="bg-ws-bg rounded p-3 text-sm text-ws-text-secondary overflow-auto max-h-96 whitespace-pre-wrap border border-ws-border">
             {data.user_prompt || item.content}
           </pre>
         </div>
       )}
 
       {category === 'file_read' && (
-        <div className="p-4">
-          <h4 className="text-xs font-medium text-devin-muted uppercase tracking-wider mb-2">File Read</h4>
-          <div className="bg-devin-darker rounded-lg p-4">
-            <div className="flex items-center gap-2 text-devin-text">
-              <FileCode className="w-4 h-4 text-yellow-400" />
+        <div className="p-3">
+          <h4 className="text-xs text-ws-text-muted uppercase tracking-wider mb-2">File Read</h4>
+          <div className="bg-ws-bg rounded p-3 border border-ws-border">
+            <div className="flex items-center gap-2 text-ws-text-secondary">
+              <FileCode className="w-4 h-4 text-ws-orange" />
               <span className="font-mono text-sm">{data.file_path || item.file_path}</span>
             </div>
           </div>
         </div>
       )}
 
-      {category === 'file_write' && hasEdits && (
-        <div className="p-4">
+      {category === 'file_write' && (
+        <div className="p-3">
           <div className="flex items-center justify-between mb-2">
-            <h4 className="text-xs font-medium text-devin-muted uppercase tracking-wider">
-              Code Changes ({data.edit_count} edits, {data.net_lines_delta > 0 ? '+' : ''}{data.net_lines_delta || 0} lines)
+            <h4 className="text-xs text-ws-text-muted uppercase tracking-wider">
+              Code Changes {data.edit_count ? `(${data.edit_count} edits${data.net_lines_delta !== undefined ? `, ${data.net_lines_delta > 0 ? '+' : ''}${data.net_lines_delta} lines` : ''})` : ''}
             </h4>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-green-400">+{data.total_lines_added || 0}</span>
-              <span className="text-red-400">-{data.total_lines_removed || 0}</span>
+            {(data.total_lines_added !== undefined || data.total_lines_removed !== undefined) && (
+              <div className="flex items-center gap-2 text-xs">
+                <span className="text-ws-teal">+{data.total_lines_added || 0}</span>
+                <span className="text-red-400">-{data.total_lines_removed || 0}</span>
+              </div>
+            )}
+          </div>
+          <div className="bg-ws-bg rounded p-3 mb-3 border border-ws-border">
+            <div className="flex items-center gap-2 text-ws-text-secondary">
+              <FileCode className="w-4 h-4 text-ws-teal" />
+              <span className="font-mono text-sm">{data.file_path || item.file_path || 'unknown file'}</span>
             </div>
           </div>
-          <div className="bg-devin-darker rounded-lg p-3 mb-3">
-            <div className="flex items-center gap-2 text-devin-text">
-              <FileCode className="w-4 h-4 text-green-400" />
-              <span className="font-mono text-sm">{data.file_path}</span>
-            </div>
-          </div>
-          <DiffViewer edits={data.edits} copyToClipboard={copyToClipboard} />
+          {hasEdits && <DiffViewer edits={data.edits} copyToClipboard={copyToClipboard} />}
         </div>
       )}
 
       {category === 'command' && (
-        <div className="p-4">
+        <div className="p-3">
           <div className="flex items-center justify-between mb-2">
-            <h4 className="text-xs font-medium text-devin-muted uppercase tracking-wider">Command</h4>
+            <h4 className="text-xs text-ws-text-muted uppercase tracking-wider">Command</h4>
             <button
               onClick={(e) => { e.stopPropagation(); copyToClipboard(data.command_line || ''); }}
-              className="text-xs text-devin-muted hover:text-devin-text flex items-center gap-1"
+              className="text-xs text-ws-text-muted hover:text-ws-text flex items-center gap-1"
             >
               <Copy className="w-3 h-3" /> Copy
             </button>
           </div>
-          <div className="bg-devin-darker rounded-lg p-4 font-mono text-sm">
-            <span className="text-orange-400">$</span> <span className="text-devin-text">{data.command_line}</span>
+          <div className="bg-ws-bg rounded p-3 font-mono text-sm border border-ws-border">
+            <span className="text-ws-orange">$</span> <span className="text-ws-text-secondary">{data.command_line}</span>
           </div>
           {data.cwd && (
-            <p className="text-xs text-devin-muted mt-2">Working directory: {data.cwd}</p>
+            <p className="text-xs text-ws-text-muted mt-2">Working directory: {data.cwd}</p>
           )}
         </div>
       )}
 
       {category === 'mcp' && (
-        <div className="p-4">
-          <h4 className="text-xs font-medium text-devin-muted uppercase tracking-wider mb-2">MCP Tool Call</h4>
-          <div className="bg-devin-darker rounded-lg p-4">
+        <div className="p-3">
+          <h4 className="text-xs text-ws-text-muted uppercase tracking-wider mb-2">MCP Tool Call</h4>
+          <div className="bg-ws-bg rounded p-3 border border-ws-border">
             <div className="flex items-center gap-2 mb-2">
-              <Zap className="w-4 h-4 text-purple-400" />
-              <span className="text-devin-text font-medium">{data.mcp_full_tool || data.mcp_tool_name}</span>
+              <Zap className="w-4 h-4 text-ws-teal" />
+              <span className="text-ws-text font-medium">{data.mcp_full_tool || data.mcp_tool_name}</span>
             </div>
-            <pre className="text-xs text-devin-muted overflow-auto max-h-32">
+            <pre className="text-xs text-ws-text-muted overflow-auto max-h-32">
               {JSON.stringify(data.mcp_tool_arguments, null, 2)}
             </pre>
             {data.mcp_result && (
-              <div className="mt-3 pt-3 border-t border-devin-border">
-                <p className="text-xs text-devin-muted mb-1">Result:</p>
-                <pre className="text-xs text-devin-text overflow-auto max-h-32">
+              <div className="mt-3 pt-3 border-t border-ws-border">
+                <p className="text-xs text-ws-text-muted mb-1">Result:</p>
+                <pre className="text-xs text-ws-text-secondary overflow-auto max-h-32">
                   {typeof data.mcp_result === 'string' ? data.mcp_result : JSON.stringify(data.mcp_result, null, 2)}
                 </pre>
               </div>
@@ -1028,9 +1769,9 @@ function ExpandedEventContent({ event, entry, copyToClipboard }) {
 
       {/* Legacy content display */}
       {!['prompt', 'file_read', 'file_write', 'command', 'mcp'].includes(category) && item.content && (
-        <div className="p-4">
-          <h4 className="text-xs font-medium text-devin-muted uppercase tracking-wider mb-2">Content</h4>
-          <pre className="bg-devin-darker rounded-lg p-4 text-sm text-devin-text overflow-auto max-h-96 whitespace-pre-wrap">
+        <div className="p-3">
+          <h4 className="text-xs text-ws-text-muted uppercase tracking-wider mb-2">Content</h4>
+          <pre className="bg-ws-bg rounded p-3 text-sm text-ws-text-secondary overflow-auto max-h-96 whitespace-pre-wrap border border-ws-border">
             {item.content}
           </pre>
         </div>
@@ -1038,23 +1779,23 @@ function ExpandedEventContent({ event, entry, copyToClipboard }) {
 
       {/* Legacy Code Blocks */}
       {hasCodeBlocks && (
-        <div className="p-4 border-t border-devin-border">
-          <h4 className="text-xs font-medium text-devin-muted uppercase tracking-wider mb-2">
+        <div className="p-3 border-t border-ws-border">
+          <h4 className="text-xs text-ws-text-muted uppercase tracking-wider mb-2">
             Generated Code ({item.code_blocks.length} blocks)
           </h4>
-          <div className="space-y-3">
+          <div className="space-y-2">
             {item.code_blocks.map((block, idx) => (
-              <div key={idx} className="bg-devin-darker rounded-lg overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-2 bg-devin-border/50">
-                  <span className="text-xs font-medium text-devin-teal">{block.language}</span>
+              <div key={idx} className="bg-ws-bg rounded overflow-hidden border border-ws-border">
+                <div className="flex items-center justify-between px-3 py-2 bg-ws-sidebar">
+                  <span className="text-xs font-medium text-ws-teal">{block.language}</span>
                   <button
                     onClick={(e) => { e.stopPropagation(); copyToClipboard(block.code); }}
-                    className="text-xs text-devin-muted hover:text-devin-text"
+                    className="text-xs text-ws-text-muted hover:text-ws-text"
                   >
                     Copy
                   </button>
                 </div>
-                <pre className="p-4 text-sm text-devin-text overflow-auto max-h-64">
+                <pre className="p-3 text-sm text-ws-text-secondary overflow-auto max-h-64">
                   <code>{block.code}</code>
                 </pre>
               </div>
@@ -1064,8 +1805,8 @@ function ExpandedEventContent({ event, entry, copyToClipboard }) {
       )}
 
       {/* Metadata */}
-      <div className="p-4 border-t border-devin-border bg-devin-darker/50">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+      <div className="p-3 border-t border-ws-border bg-ws-sidebar">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
           <MetadataItem label="Event ID" value={item.event_id || item.id || 'N/A'} />
           <MetadataItem label="Trajectory ID" value={item.trajectory_id || 'N/A'} />
           <MetadataItem label="Hostname" value={item.hostname || item.system?.hostname || 'N/A'} />
@@ -1082,34 +1823,34 @@ function DiffViewer({ edits, copyToClipboard }) {
   if (!edits || edits.length === 0) return null;
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       <div className="flex items-center gap-2">
         <button
           onClick={() => setViewMode('unified')}
-          className={`px-2 py-1 text-xs rounded ${viewMode === 'unified' ? 'bg-devin-teal text-white' : 'bg-devin-border text-devin-muted'}`}
+          className={`px-2 py-1 text-xs rounded ${viewMode === 'unified' ? 'bg-ws-teal text-white' : 'bg-ws-card border border-ws-border text-ws-text-muted'}`}
         >
           Unified
         </button>
         <button
           onClick={() => setViewMode('split')}
-          className={`px-2 py-1 text-xs rounded ${viewMode === 'split' ? 'bg-devin-teal text-white' : 'bg-devin-border text-devin-muted'}`}
+          className={`px-2 py-1 text-xs rounded ${viewMode === 'split' ? 'bg-ws-teal text-white' : 'bg-ws-card border border-ws-border text-ws-text-muted'}`}
         >
           Split
         </button>
       </div>
 
       {edits.map((edit, idx) => (
-        <div key={idx} className="bg-devin-darker rounded-lg overflow-hidden">
-          <div className="flex items-center justify-between px-3 py-2 bg-devin-border/50 text-xs">
-            <span className="text-devin-muted">Edit {idx + 1}</span>
+        <div key={idx} className="bg-ws-bg rounded overflow-hidden border border-ws-border">
+          <div className="flex items-center justify-between px-3 py-2 bg-ws-sidebar text-xs">
+            <span className="text-ws-text-muted">Edit {idx + 1}</span>
             <div className="flex items-center gap-3">
-              <span className="text-green-400">+{edit.new_lines || 0}</span>
+              <span className="text-ws-teal">+{edit.new_lines || 0}</span>
               <span className="text-red-400">-{edit.old_lines || 0}</span>
               <button
                 onClick={(e) => { e.stopPropagation(); copyToClipboard(edit.new_string); }}
-                className="text-devin-muted hover:text-devin-text flex items-center gap-1"
+                className="text-ws-text-muted hover:text-ws-text flex items-center gap-1"
               >
-                <Copy className="w-3 h-3" /> Copy new
+                <Copy className="w-3 h-3" /> Copy
               </button>
             </div>
           </div>
@@ -1123,19 +1864,19 @@ function DiffViewer({ edits, copyToClipboard }) {
               )}
               {edit.new_string && (
                 <div className="diff-add px-2 py-1">
-                  <pre className="text-green-300 whitespace-pre-wrap">{edit.new_string}</pre>
+                  <pre className="text-ws-teal whitespace-pre-wrap">{edit.new_string}</pre>
                 </div>
               )}
             </div>
           ) : (
-            <div className="grid grid-cols-2 divide-x divide-devin-border">
+            <div className="grid grid-cols-2 divide-x divide-ws-border">
               <div className="p-3 font-mono text-xs overflow-auto max-h-64 bg-red-500/5">
                 <p className="text-red-400 text-xs mb-2 font-sans">Before</p>
                 <pre className="text-red-300 whitespace-pre-wrap">{edit.old_string || '(empty)'}</pre>
               </div>
-              <div className="p-3 font-mono text-xs overflow-auto max-h-64 bg-green-500/5">
-                <p className="text-green-400 text-xs mb-2 font-sans">After</p>
-                <pre className="text-green-300 whitespace-pre-wrap">{edit.new_string || '(empty)'}</pre>
+              <div className="p-3 font-mono text-xs overflow-auto max-h-64 bg-ws-teal/5">
+                <p className="text-ws-teal text-xs mb-2 font-sans">After</p>
+                <pre className="text-ws-teal whitespace-pre-wrap">{edit.new_string || '(empty)'}</pre>
               </div>
             </div>
           )}
@@ -1148,8 +1889,8 @@ function DiffViewer({ edits, copyToClipboard }) {
 function MetadataItem({ label, value }) {
   return (
     <div>
-      <p className="text-xs text-devin-muted">{label}</p>
-      <p className="text-devin-text truncate" title={value}>{value}</p>
+      <p className="text-ws-text-muted mb-0.5">{label}</p>
+      <p className="text-ws-text-secondary truncate" title={value}>{value}</p>
     </div>
   );
 }
@@ -1158,26 +1899,35 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
   const [path, setPath] = useState(currentDir);
   const [directories, setDirectories] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
   const fetchDirectories = async (dir) => {
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch(`${API_BASE}/directories/browse?path=${encodeURIComponent(dir)}`);
       const data = await res.json();
+      if (data.error) {
+        setError(data.error);
+        return;
+      }
       if (data.items) {
         setDirectories(data.items);
         setPath(data.current_path);
       }
     } catch (err) {
       console.error('Failed to browse directories:', err);
+      setError('Failed to browse directory');
     } finally {
       setLoading(false);
     }
   };
 
+  // Update path when currentDir prop changes (modal reopened)
   useEffect(() => {
-    fetchDirectories(path);
-  }, []);
+    setPath(currentDir);
+    fetchDirectories(currentDir);
+  }, [currentDir]);
 
   const goUp = () => {
     const parent = path.split('/').slice(0, -1).join('/') || '/';
@@ -1185,30 +1935,30 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-devin-card border border-devin-border rounded-xl w-full max-w-lg max-h-[80vh] flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b border-devin-border">
-          <h2 className="text-lg font-semibold text-devin-text">Select Log Directory</h2>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+      <div className="bg-ws-card border border-ws-border rounded w-full max-w-lg max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between p-4 border-b border-ws-border">
+          <h2 className="text-base font-semibold text-ws-text">Select Log Directory</h2>
           <button
             onClick={onClose}
-            className="p-1 hover:bg-devin-border rounded text-devin-muted hover:text-devin-text transition-colors"
+            className="p-1 hover:bg-ws-card-hover rounded text-ws-text-muted hover:text-ws-text transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="p-4 border-b border-devin-border">
+        <div className="p-4 border-b border-ws-border">
           <div className="flex items-center gap-2">
             <input
               type="text"
               value={path}
               onChange={(e) => setPath(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && fetchDirectories(path)}
-              className="flex-1 px-3 py-2 bg-devin-darker border border-devin-border rounded-lg text-devin-text focus:outline-none focus:border-devin-teal"
+              className="flex-1 px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text text-sm focus:outline-none focus:border-ws-teal"
             />
             <button
               onClick={() => fetchDirectories(path)}
-              className="px-3 py-2 bg-devin-teal hover:bg-devin-teal-light text-white rounded-lg transition-colors"
+              className="px-3 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm transition-colors"
             >
               Go
             </button>
@@ -1218,47 +1968,61 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
         <div className="flex-1 overflow-auto p-2">
           <button
             onClick={goUp}
-            className="w-full flex items-center gap-2 p-3 rounded-lg hover:bg-devin-border text-devin-text transition-colors"
+            className="w-full flex items-center gap-2 p-2 rounded hover:bg-ws-card-hover text-ws-text-secondary text-sm transition-colors"
           >
-            <FolderOpen className="w-4 h-4 text-devin-muted" />
+            <FolderOpen className="w-4 h-4 text-ws-text-muted" />
             <span>..</span>
           </button>
 
           {loading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-6 w-6 border-2 border-devin-teal border-t-transparent"></div>
+              <div className="animate-spin rounded-full h-5 w-5 border-2 border-ws-teal border-t-transparent"></div>
+            </div>
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center py-8 text-center">
+              <p className="text-red-400 text-sm mb-2">{error}</p>
+              <button
+                onClick={() => fetchDirectories(path)}
+                className="text-xs text-ws-teal hover:underline"
+              >
+                Try again
+              </button>
+            </div>
+          ) : directories.length === 0 ? (
+            <div className="flex items-center justify-center py-8">
+              <p className="text-ws-text-muted text-sm">No subdirectories found</p>
             </div>
           ) : (
             directories.map(dir => (
               <button
                 key={dir.path}
                 onClick={() => fetchDirectories(dir.path)}
-                className={`w-full flex items-center gap-2 p-3 rounded-lg hover:bg-devin-border text-devin-text transition-colors ${
-                  dir.has_logs ? 'border border-devin-teal/30' : ''
+                className={`w-full flex items-center gap-2 p-2 rounded hover:bg-ws-card-hover text-ws-text-secondary text-sm transition-colors ${
+                  dir.has_logs ? 'border border-ws-teal/30' : ''
                 }`}
               >
-                <FolderOpen className={`w-4 h-4 ${dir.has_logs ? 'text-devin-teal' : 'text-devin-muted'}`} />
+                <FolderOpen className={`w-4 h-4 ${dir.has_logs ? 'text-ws-teal' : 'text-ws-text-muted'}`} />
                 <span className="flex-1 text-left" style={{wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: '1.2'}}>{dir.name}</span>
                 {dir.has_logs && (
-                  <span className="text-xs text-devin-teal">Has logs</span>
+                  <span className="text-xs text-ws-teal">Has logs</span>
                 )}
               </button>
             ))
           )}
         </div>
 
-        <div className="p-4 border-t border-devin-border flex justify-end gap-2">
+        <div className="p-4 border-t border-ws-border flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-devin-muted hover:text-devin-text transition-colors"
+            className="px-4 py-2 text-ws-text-muted hover:text-ws-text text-sm transition-colors"
           >
             Cancel
           </button>
           <button
             onClick={() => onSelect(path)}
-            className="px-4 py-2 bg-devin-teal hover:bg-devin-teal-light text-white rounded-lg transition-colors"
+            className="px-4 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm transition-colors"
           >
-            Select This Directory
+            Select Directory
           </button>
         </div>
       </div>

@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  dashboard:
+    build: .
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - WINDSURF_LOG_DIR=/app/logs
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5173
+      - FLASK_DEBUG=false
+      - WINDSURF_RATE_LIMIT=100
+      - WINDSURF_RATE_LIMIT_WINDOW=60
+      - WINDSURF_CACHE_TTL=60
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5173/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped

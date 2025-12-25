@@ -7,14 +7,20 @@ export default {
   theme: {
     extend: {
       colors: {
-        'devin-dark': '#0a0f1a',
-        'devin-darker': '#060a12',
-        'devin-card': '#111827',
-        'devin-border': '#1e293b',
-        'devin-teal': '#14b8a6',
-        'devin-teal-light': '#2dd4bf',
-        'devin-text': '#e2e8f0',
-        'devin-muted': '#94a3b8',
+        'ws': {
+          'bg': '#0a0a0a',
+          'sidebar': '#0f0f0f',
+          'card': '#141414',
+          'card-hover': '#1a1a1a',
+          'border': '#1f1f1f',
+          'border-light': '#2a2a2a',
+          'teal': '#00d4aa',
+          'teal-dim': '#00a88a',
+          'orange': '#f59e0b',
+          'text': '#ffffff',
+          'text-secondary': '#a1a1a1',
+          'text-muted': '#6b6b6b',
+        }
       }
     },
   },

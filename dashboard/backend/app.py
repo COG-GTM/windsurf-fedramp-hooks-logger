@@ -7,15 +7,166 @@ import os
 import re
 import csv
 import io
+import sys
+import time
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta
+from functools import wraps
+from collections import OrderedDict
+from typing import Optional, Dict, List, Any, Generator
+
+# Add parent directory to path for config import
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+try:
+    from config import (
+        LOG_DIR, FLASK_HOST, FLASK_PORT, FLASK_DEBUG,
+        DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, CACHE_TTL, CACHE_MAX_SIZE,
+        RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW, CORS_ORIGINS, ALLOWED_BROWSE_PATHS
+    )
+except ImportError:
+    # Fallback defaults if config not available
+    LOG_DIR = Path(__file__).parent.parent.parent / "logs"
+    FLASK_HOST = "0.0.0.0"
+    FLASK_PORT = 5173
+    FLASK_DEBUG = False
+    DEFAULT_PAGE_SIZE = 100
+    MAX_PAGE_SIZE = 1000
+    CACHE_TTL = 60
+    CACHE_MAX_SIZE = 100
+    RATE_LIMIT_REQUESTS = 100
+    RATE_LIMIT_WINDOW = 60
+    CORS_ORIGINS = ["*"]
+    ALLOWED_BROWSE_PATHS = [str(Path(__file__).parent.parent.parent), os.path.expanduser("~")]
 
 app = Flask(__name__, static_folder='../frontend/dist', static_url_path='')
-CORS(app)
+CORS(app, origins=CORS_ORIGINS)
 
-DEFAULT_LOG_DIR = "/Users/chasedalton/CascadeProjects/windsurf-logger/logs"
+DEFAULT_LOG_DIR = str(LOG_DIR)
 
-# Category mappings for the new log structure
+
+# ============================================================================
+# LRU Cache Implementation
+# ============================================================================
+class LRUCache:
+    """Thread-safe LRU cache with TTL support."""
+    
+    def __init__(self, max_size: int = CACHE_MAX_SIZE, ttl: int = CACHE_TTL):
+        self.max_size = max_size
+        self.ttl = ttl
+        self.cache: OrderedDict = OrderedDict()
+        self.timestamps: Dict[str, float] = {}
+        self.lock = threading.Lock()
+    
+    def get(self, key: str) -> Optional[Any]:
+        with self.lock:
+            if key not in self.cache:
+                return None
+            if time.time() - self.timestamps[key] > self.ttl:
+                del self.cache[key]
+                del self.timestamps[key]
+                return None
+            self.cache.move_to_end(key)
+            return self.cache[key]
+    
+    def set(self, key: str, value: Any) -> None:
+        with self.lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+            else:
+                if len(self.cache) >= self.max_size:
+                    oldest = next(iter(self.cache))
+                    del self.cache[oldest]
+                    del self.timestamps[oldest]
+            self.cache[key] = value
+            self.timestamps[key] = time.time()
+    
+    def invalidate(self, pattern: Optional[str] = None) -> None:
+        with self.lock:
+            if pattern is None:
+                self.cache.clear()
+                self.timestamps.clear()
+            else:
+                keys_to_delete = [k for k in self.cache if pattern in k]
+                for key in keys_to_delete:
+                    del self.cache[key]
+                    del self.timestamps[key]
+
+
+# Global cache instance
+cache = LRUCache()
+
+
+# ============================================================================
+# Rate Limiting
+# ============================================================================
+class RateLimiter:
+    """Simple in-memory rate limiter."""
+    
+    def __init__(self, max_requests: int = RATE_LIMIT_REQUESTS, window: int = RATE_LIMIT_WINDOW):
+        self.max_requests = max_requests
+        self.window = window
+        self.requests: Dict[str, List[float]] = {}
+        self.lock = threading.Lock()
+    
+    def is_allowed(self, client_ip: str) -> bool:
+        with self.lock:
+            now = time.time()
+            if client_ip not in self.requests:
+                self.requests[client_ip] = []
+            
+            # Remove old requests outside the window
+            self.requests[client_ip] = [
+                t for t in self.requests[client_ip] 
+                if now - t < self.window
+            ]
+            
+            if len(self.requests[client_ip]) >= self.max_requests:
+                return False
+            
+            self.requests[client_ip].append(now)
+            return True
+
+
+rate_limiter = RateLimiter()
+
+
+def rate_limit(f):
+    """Decorator to apply rate limiting to endpoints."""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        client_ip = request.remote_addr or "unknown"
+        if not rate_limiter.is_allowed(client_ip):
+            return jsonify({
+                "error": "Rate limit exceeded",
+                "retry_after": RATE_LIMIT_WINDOW
+            }), 429
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+# ============================================================================
+# Input Validation
+# ============================================================================
+def validate_path(path: str) -> bool:
+    """Validate that a path is safe and within allowed directories."""
+    try:
+        resolved = Path(path).resolve()
+        return any(
+            str(resolved).startswith(str(Path(allowed).resolve()))
+            for allowed in ALLOWED_BROWSE_PATHS
+        )
+    except (ValueError, OSError):
+        return False
+
+
+def sanitize_filename(filename: str) -> str:
+    """Sanitize filename to prevent path traversal."""
+    return os.path.basename(filename)
+
+# ============================================================================
+# Constants
+# ============================================================================
 CATEGORY_COLORS = {
     "prompt": {"bg": "blue", "label": "Prompt"},
     "file_read": {"bg": "yellow", "label": "File Read"},
@@ -25,24 +176,57 @@ CATEGORY_COLORS = {
 }
 
 
-def parse_jsonl_file(filepath):
-    """Parse a JSONL file and return list of entries."""
-    entries = []
+# ============================================================================
+# File Parsing with Streaming Support
+# ============================================================================
+def stream_jsonl_file(filepath: str) -> Generator[Dict, None, None]:
+    """Stream JSONL file line by line to reduce memory usage."""
     if not os.path.exists(filepath):
-        return entries
+        return
     
-    with open(filepath, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    entry = json.loads(line)
-                    # Normalize entry structure for both old and new formats
-                    entry = normalize_entry(entry)
-                    entries.append(entry)
-                except json.JSONDecodeError:
-                    continue
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entry = json.loads(line)
+                        yield normalize_entry(entry)
+                    except json.JSONDecodeError:
+                        continue
+    except (IOError, OSError) as e:
+        app.logger.error(f"Error reading file {filepath}: {e}")
+
+
+def parse_jsonl_file(filepath: str, limit: Optional[int] = None, offset: int = 0) -> List[Dict]:
+    """Parse a JSONL file with optional pagination."""
+    entries = []
+    count = 0
+    
+    for entry in stream_jsonl_file(filepath):
+        if count < offset:
+            count += 1
+            continue
+        
+        entries.append(entry)
+        count += 1
+        
+        if limit and len(entries) >= limit:
+            break
+    
     return entries
+
+
+def count_jsonl_entries(filepath: str) -> int:
+    """Count entries in a JSONL file efficiently."""
+    if not os.path.exists(filepath) or not filepath.endswith('.jsonl'):
+        return 0
+    
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return sum(1 for line in f if line.strip())
+    except (IOError, OSError):
+        return 0
 
 
 def normalize_entry(entry):
@@ -82,16 +266,35 @@ def normalize_entry(entry):
     return entry
 
 
+# Action to category mapping for text log parsing
+ACTION_TO_CATEGORY = {
+    "pre_user_prompt": "prompt",
+    "pre_read_code": "file_read",
+    "post_read_code": "file_read",
+    "pre_write_code": "file_write",
+    "post_write_code": "file_write",
+    "pre_run_command": "command",
+    "post_run_command": "command",
+    "pre_mcp_tool_use": "mcp",
+    "post_mcp_tool_use": "mcp",
+}
+
+
 def parse_text_log(filepath):
     """Parse a human-readable log file and return structured entries."""
     entries = []
     if not os.path.exists(filepath):
         return entries
     
-    with open(filepath, 'r') as f:
-        content = f.read()
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except (IOError, OSError) as e:
+        app.logger.error(f"Error reading text log {filepath}: {e}")
+        return entries
     
-    blocks = content.split('=' * 80)
+    # Split by separator line (80 equals signs)
+    blocks = re.split(r'\n={70,}\n', content)
     for block in blocks:
         block = block.strip()
         if not block:
@@ -99,15 +302,91 @@ def parse_text_log(filepath):
         
         entry = {"raw": block, "category": "unknown"}
         lines = block.split('\n')
-        for line in lines:
-            if line.startswith('Timestamp:'):
-                entry['timestamp'] = line.replace('Timestamp:', '').strip()
+        content_lines = []  # Collect content lines (e.g., prompt text)
+        capturing_content = False
+        
+        for i, line in enumerate(lines):
+            # Parse timestamp format: [2025-12-22T20:43:03.758814] action_name
+            if line.startswith('[') and ']' in line:
+                timestamp_part = line.split(']')[0]
+                entry['timestamp'] = timestamp_part[1:]  # Remove opening bracket
+                action_part = line.split(']')[1].strip()
+                if action_part:
+                    entry['action'] = action_part
+                    # Map action to category
+                    entry['category'] = ACTION_TO_CATEGORY.get(action_part, 'unknown')
             elif line.startswith('User:'):
-                entry['user'] = line.replace('User:', '').strip()
+                # Parse "User: username@hostname" format
+                user_info = line.replace('User:', '').strip()
+                if '@' in user_info:
+                    parts = user_info.split('@')
+                    entry['user'] = parts[0]
+                    entry['hostname'] = parts[1] if len(parts) > 1 else None
+                else:
+                    entry['user'] = user_info
+            elif line.startswith('Trajectory:'):
+                entry['trajectory_id'] = line.replace('Trajectory:', '').strip()
             elif line.startswith('Trajectory ID:'):
                 entry['trajectory_id'] = line.replace('Trajectory ID:', '').strip()
             elif line.startswith('Action:'):
-                entry['action'] = line.replace('Action:', '').strip()
+                action_val = line.replace('Action:', '').strip()
+                entry['action'] = action_val
+                entry['category'] = ACTION_TO_CATEGORY.get(action_val, 'unknown')
+            elif line.startswith('Prompt'):
+                # Start capturing content after this line
+                capturing_content = True
+            elif line.startswith('File:'):
+                file_val = line.replace('File:', '').strip()
+                entry['file'] = file_val
+                entry['file_path'] = file_val
+                # Build data object for consistency with JSONL format
+                if 'data' not in entry:
+                    entry['data'] = {}
+                entry['data']['file_path'] = file_val
+            elif line.startswith('Command:'):
+                cmd_val = line.replace('Command:', '').strip()
+                entry['command_line'] = cmd_val
+                if 'data' not in entry:
+                    entry['data'] = {}
+                entry['data']['command_line'] = cmd_val
+            elif line.startswith('CWD:'):
+                cwd_val = line.replace('CWD:', '').strip()
+                if 'data' not in entry:
+                    entry['data'] = {}
+                entry['data']['cwd'] = cwd_val
+            elif line.startswith('Edits:'):
+                # Parse "Edits: N, Lines: +X/-Y"
+                if 'data' not in entry:
+                    entry['data'] = {}
+                match = re.match(r'Edits:\s*(\d+)', line)
+                if match:
+                    entry['data']['edit_count'] = int(match.group(1))
+            elif line.startswith('MCP Tool:'):
+                mcp_val = line.replace('MCP Tool:', '').strip()
+                if 'data' not in entry:
+                    entry['data'] = {}
+                entry['data']['mcp_full_tool'] = mcp_val
+                entry['data']['mcp_tool_name'] = mcp_val
+            elif line.startswith('Arguments:'):
+                args_val = line.replace('Arguments:', '').strip()
+                if 'data' not in entry:
+                    entry['data'] = {}
+                try:
+                    entry['data']['mcp_tool_arguments'] = json.loads(args_val)
+                except json.JSONDecodeError:
+                    entry['data']['mcp_tool_arguments'] = args_val
+            elif capturing_content and line.strip():
+                # Collect content lines after "Prompt" header
+                if not line.startswith('... [truncated]'):
+                    content_lines.append(line)
+        
+        # Join collected content
+        if content_lines:
+            content = '\n'.join(content_lines)
+            entry['content'] = content
+            if 'data' not in entry:
+                entry['data'] = {}
+            entry['data']['user_prompt'] = content
         
         if 'timestamp' in entry:
             entries.append(entry)
@@ -115,53 +394,99 @@ def parse_text_log(filepath):
     return entries
 
 
-def count_log_entries(filepath):
-    """Count number of entries in a JSONL file."""
-    if not filepath.endswith('.jsonl') or not os.path.exists(filepath):
+def count_text_log_entries(filepath: str) -> int:
+    """Count entries in a text log file by counting separator blocks."""
+    if not os.path.exists(filepath) or not filepath.endswith('.log'):
         return 0
     
     try:
-        with open(filepath, 'r') as f:
-            return sum(1 for line in f if line.strip())
-    except:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        # Count blocks separated by equals signs (80 char separators)
+        blocks = re.split(r'\n={70,}\n', content)
+        return sum(1 for block in blocks if block.strip())
+    except (IOError, OSError):
         return 0
 
 
+def count_log_entries(filepath: str) -> int:
+    """Count number of entries in a log file (JSONL or text format)."""
+    if filepath.endswith('.jsonl'):
+        return count_jsonl_entries(filepath)
+    elif filepath.endswith('.log'):
+        return count_text_log_entries(filepath)
+    return 0
+
+
+# ============================================================================
+# API Endpoints
+# ============================================================================
 @app.route('/api/logs/files', methods=['GET'])
+@rate_limit
 def get_log_files():
     """Get list of available log files in a directory."""
     log_dir = request.args.get('dir', DEFAULT_LOG_DIR)
     
+    # Security: Validate path
+    if not validate_path(log_dir):
+        return jsonify({"error": "Access denied to this directory"}), 403
+    
     if not os.path.exists(log_dir):
         return jsonify({"error": f"Directory not found: {log_dir}"}), 404
     
+    # Check cache
+    cache_key = f"files:{log_dir}"
+    cached = cache.get(cache_key)
+    if cached:
+        return jsonify(cached)
+    
     files = []
-    for f in os.listdir(log_dir):
-        filepath = os.path.join(log_dir, f)
-        if os.path.isfile(filepath) and (f.endswith('.jsonl') or f.endswith('.log')):
-            stat = os.stat(filepath)
-            entry_count = count_log_entries(filepath)
-            files.append({
-                "name": f,
-                "path": filepath,
-                "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                "type": "jsonl" if f.endswith('.jsonl') else "log",
-                "entries": entry_count
-            })
+    try:
+        for f in os.listdir(log_dir):
+            filepath = os.path.join(log_dir, f)
+            if os.path.isfile(filepath) and (f.endswith('.jsonl') or f.endswith('.log')):
+                stat = os.stat(filepath)
+                entry_count = count_log_entries(filepath)
+                files.append({
+                    "name": f,
+                    "path": filepath,
+                    "size": stat.st_size,
+                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "type": "jsonl" if f.endswith('.jsonl') else "log",
+                    "entries": entry_count
+                })
+    except (IOError, OSError) as e:
+        return jsonify({"error": f"Error reading directory: {str(e)}"}), 500
     
     files.sort(key=lambda x: x['modified'], reverse=True)
-    return jsonify({"files": files, "directory": log_dir})
+    result = {"files": files, "directory": log_dir}
+    cache.set(cache_key, result)
+    return jsonify(result)
 
 
 @app.route('/api/logs/data', methods=['GET'])
+@rate_limit
 def get_log_data():
-    """Get log data from specified file(s)."""
+    """Get log data from specified file(s) with pagination and filter support."""
     filepaths = request.args.getlist('files')
+    page = max(1, int(request.args.get('page', 1)))
+    page_size = min(MAX_PAGE_SIZE, int(request.args.get('page_size', DEFAULT_PAGE_SIZE)))
+    
+    # Filter parameters
+    category = request.args.get('category')
+    user = request.args.get('user')
+    session = request.args.get('session')
+    query = request.args.get('q', '')
+    date_from = request.args.get('date_from')
+    date_to = request.args.get('date_to')
     
     if not filepaths:
-        # Default to all events log
         filepaths = [os.path.join(DEFAULT_LOG_DIR, 'all_events.jsonl')]
+    
+    # Validate all paths
+    for filepath in filepaths:
+        if not validate_path(filepath):
+            return jsonify({"error": f"Access denied: {filepath}"}), 403
     
     all_entries = []
     
@@ -178,17 +503,66 @@ def get_log_data():
             entry['source_file'] = os.path.basename(filepath)
         all_entries.extend(entries)
     
+    # Apply filters
+    filtered_entries = []
+    for entry in all_entries:
+        # Category filter
+        entry_category = entry.get('category', entry.get('type', ''))
+        if category and category != 'all' and entry_category != category:
+            continue
+        
+        # User filter
+        if user and user != 'all' and entry.get('user') != user:
+            continue
+        
+        # Session filter
+        if session and session != 'all' and entry.get('trajectory_id') != session:
+            continue
+        
+        # Date range filter
+        timestamp = entry.get('timestamp', '')
+        if date_from and timestamp < date_from:
+            continue
+        if date_to and timestamp > date_to:
+            continue
+        
+        # Text search
+        if query:
+            searchable = get_searchable_text(entry)
+            if query.lower() not in searchable.lower():
+                continue
+        
+        filtered_entries.append(entry)
+    
     # Sort by timestamp
-    all_entries.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    filtered_entries.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+    
+    # Apply pagination
+    total = len(filtered_entries)
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+    paginated_entries = filtered_entries[start_idx:end_idx]
     
     return jsonify({
-        "entries": all_entries,
-        "total": len(all_entries),
-        "files_loaded": filepaths
+        "entries": paginated_entries,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
+        "files_loaded": filepaths,
+        "filters_applied": {
+            "category": category,
+            "user": user,
+            "session": session,
+            "query": query,
+            "date_from": date_from,
+            "date_to": date_to
+        }
     })
 
 
 @app.route('/api/logs/stats', methods=['GET'])
+@rate_limit
 def get_stats():
     """Get statistics about the logs."""
     log_dir = request.args.get('dir', DEFAULT_LOG_DIR)
@@ -263,6 +637,7 @@ def get_stats():
 
 
 @app.route('/api/logs/search', methods=['GET'])
+@rate_limit
 def search_logs():
     """Advanced search with multiple filter options."""
     query = request.args.get('q', '')
@@ -389,6 +764,7 @@ def get_searchable_text(entry):
 
 
 @app.route('/api/logs/sessions', methods=['GET'])
+@rate_limit
 def get_sessions():
     """Get all sessions with their events grouped."""
     log_dir = request.args.get('dir', DEFAULT_LOG_DIR)
@@ -446,6 +822,7 @@ def get_sessions():
 
 
 @app.route('/api/logs/export', methods=['GET'])
+@rate_limit
 def export_logs():
     """Export logs as CSV or JSON."""
     format_type = request.args.get('format', 'json')  # json or csv
@@ -517,9 +894,14 @@ def export_logs():
 
 
 @app.route('/api/directories/browse', methods=['GET'])
+@rate_limit
 def browse_directories():
     """Browse filesystem for log directories."""
     path = request.args.get('path', os.path.expanduser('~'))
+    
+    # Security: Validate path is within allowed directories
+    if not validate_path(path):
+        return jsonify({"error": "Access denied to this path"}), 403
     
     if not os.path.exists(path):
         return jsonify({"error": "Path not found"}), 404
@@ -568,5 +950,81 @@ def serve_static(path):
     return send_from_directory(app.static_folder, 'index.html')
 
 
+# ============================================================================
+# Health & Monitoring Endpoints
+# ============================================================================
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for monitoring."""
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.1.0"
+    })
+
+
+@app.route('/api/health', methods=['GET'])
+def api_health():
+    """Detailed health check with system info."""
+    log_dir_exists = os.path.exists(DEFAULT_LOG_DIR)
+    log_file_count = 0
+    
+    if log_dir_exists:
+        try:
+            log_file_count = len([
+                f for f in os.listdir(DEFAULT_LOG_DIR)
+                if f.endswith('.jsonl') or f.endswith('.log')
+            ])
+        except (IOError, OSError):
+            pass
+    
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "version": "1.1.0",
+        "log_directory": DEFAULT_LOG_DIR,
+        "log_directory_exists": log_dir_exists,
+        "log_file_count": log_file_count,
+        "cache_size": len(cache.cache),
+        "rate_limit": {
+            "max_requests": RATE_LIMIT_REQUESTS,
+            "window_seconds": RATE_LIMIT_WINDOW
+        }
+    })
+
+
+@app.route('/api/cache/clear', methods=['POST'])
+@rate_limit
+def clear_cache():
+    """Clear the API cache."""
+    cache.invalidate()
+    return jsonify({"status": "ok", "message": "Cache cleared"})
+
+
+# ============================================================================
+# Error Handlers
+# ============================================================================
+@app.errorhandler(404)
+def not_found(e):
+    """Handle 404 errors."""
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "Endpoint not found"}), 404
+    return send_from_directory(app.static_folder, 'index.html')
+
+
+@app.errorhandler(500)
+def internal_error(e):
+    """Handle 500 errors."""
+    app.logger.error(f"Internal error: {e}")
+    return jsonify({"error": "Internal server error"}), 500
+
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """Handle unexpected exceptions."""
+    app.logger.error(f"Unhandled exception: {e}")
+    return jsonify({"error": str(e)}), 500
+
+
 if __name__ == '__main__':
-    app.run(debug=True, port=5173, host='0.0.0.0')
+    app.run(debug=FLASK_DEBUG, port=FLASK_PORT, host=FLASK_HOST)
