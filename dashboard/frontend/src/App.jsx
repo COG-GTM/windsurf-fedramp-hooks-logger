@@ -2557,7 +2557,7 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
       aria-modal="true"
       aria-labelledby="directory-picker-title"
     >
-      <div className="bg-ws-card border border-ws-border rounded w-full max-w-lg max-h-[80vh] flex flex-col modal-bounce">
+      <div className="bg-ws-card border border-ws-border rounded-lg shadow-xl w-full max-w-xl max-h-[85vh] flex flex-col modal-bounce">
         <div className="flex items-center justify-between p-4 border-b border-ws-border">
           <h2 id="directory-picker-title" className="text-base font-semibold text-ws-text">Select Log Source</h2>
           <button
@@ -2570,43 +2570,26 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
         </div>
 
         {/* Storage Source Tabs */}
-        <div className="flex border-b border-ws-border">
-          <button
-            onClick={() => setStorageSource('local')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
-              storageSource === 'local'
-                ? 'text-ws-teal border-b-2 border-ws-teal bg-ws-teal/5'
-                : 'text-ws-text-muted hover:text-ws-text hover:bg-ws-card-hover'
-            }`}
-            aria-pressed={storageSource === 'local'}
-          >
-            <FolderOpen className="w-4 h-4" aria-hidden="true" />
-            Local
-          </button>
-          <button
-            onClick={() => setStorageSource('s3')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
-              storageSource === 's3'
-                ? 'text-ws-teal border-b-2 border-ws-teal bg-ws-teal/5'
-                : 'text-ws-text-muted hover:text-ws-text hover:bg-ws-card-hover'
-            }`}
-            aria-pressed={storageSource === 's3'}
-          >
-            <Database className="w-4 h-4" aria-hidden="true" />
-            AWS S3
-          </button>
-          <button
-            onClick={() => setStorageSource('azure')}
-            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
-              storageSource === 'azure'
-                ? 'text-ws-teal border-b-2 border-ws-teal bg-ws-teal/5'
-                : 'text-ws-text-muted hover:text-ws-text hover:bg-ws-card-hover'
-            }`}
-            aria-pressed={storageSource === 'azure'}
-          >
-            <Layers className="w-4 h-4" aria-hidden="true" />
-            Azure Blob
-          </button>
+        <div className="flex border-b border-ws-border bg-ws-bg/30">
+          {[
+            { id: 'local', label: 'Local', icon: FolderOpen },
+            { id: 's3', label: 'AWS S3', icon: Database },
+            { id: 'azure', label: 'Azure', icon: Layers }
+          ].map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => setStorageSource(id)}
+              className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium transition-all ${
+                storageSource === id
+                  ? 'text-ws-teal border-b-2 border-ws-teal bg-ws-teal/5'
+                  : 'text-ws-text-muted hover:text-ws-text hover:bg-ws-card-hover border-b-2 border-transparent'
+              }`}
+              aria-pressed={storageSource === id}
+            >
+              <Icon className="w-4 h-4" aria-hidden="true" />
+              {label}
+            </button>
+          ))}
         </div>
 
         {/* Local Directory Browser */}
@@ -2636,10 +2619,10 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
 
         {/* S3 Configuration */}
         {storageSource === 's3' && (
-          <div className="p-4 border-b border-ws-border space-y-3 max-h-[50vh] overflow-y-auto">
-            <div className="text-xs text-ws-text-muted mb-2">
-              Configure AWS S3 bucket to pull hooks logs from a remote location.
-            </div>
+          <div className="p-4 space-y-3 flex-1 overflow-y-auto">
+            <p className="text-xs text-ws-text-muted">
+              Connect to an S3 bucket containing your hooks logs.
+            </p>
             
             {/* Credential Mode Toggle */}
             <div className="flex gap-2 p-1 bg-ws-bg rounded border border-ws-border">
@@ -2779,10 +2762,10 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
 
         {/* Azure Configuration */}
         {storageSource === 'azure' && (
-          <div className="p-4 border-b border-ws-border space-y-3 max-h-[50vh] overflow-y-auto">
-            <div className="text-xs text-ws-text-muted mb-2">
-              Configure Azure Blob Storage to pull hooks logs from a remote location.
-            </div>
+          <div className="p-4 space-y-3 flex-1 overflow-y-auto">
+            <p className="text-xs text-ws-text-muted">
+              Connect to an Azure Blob container containing your hooks logs.
+            </p>
             
             {/* Credential Mode Toggle */}
             <div className="flex gap-2 p-1 bg-ws-bg rounded border border-ws-border">
@@ -2949,36 +2932,15 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
           </div>
         )}
 
-        {/* Cloud storage status content */}
-        {storageSource !== 'local' && (
-          <div className="flex-1 overflow-auto p-4 flex flex-col items-center justify-center text-center">
-            <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-3 ${
-              connectionStatus === 'success' ? 'bg-green-500/10' : 
-              connectionStatus === 'error' ? 'bg-red-500/10' : 'bg-ws-teal/10'
-            }`}>
-              {storageSource === 's3' ? (
-                <Database className={`w-6 h-6 ${
-                  connectionStatus === 'success' ? 'text-green-400' : 
-                  connectionStatus === 'error' ? 'text-red-400' : 'text-ws-teal'
-                }`} />
-              ) : (
-                <Layers className={`w-6 h-6 ${
-                  connectionStatus === 'success' ? 'text-green-400' : 
-                  connectionStatus === 'error' ? 'text-red-400' : 'text-ws-teal'
-                }`} />
-              )}
-            </div>
-            <p className="text-ws-text-secondary text-sm mb-1">
-              {storageSource === 's3' ? 'AWS S3' : 'Azure Blob Storage'}
-            </p>
+        {/* Cloud storage connection status */}
+        {storageSource !== 'local' && connectionStatus && (
+          <div className={`mx-4 mb-2 p-3 rounded-lg flex items-center gap-3 ${
+            connectionStatus === 'success' ? 'bg-green-500/10 border border-green-500/30' : 'bg-red-500/10 border border-red-500/30'
+          }`}>
             {connectionStatus === 'success' ? (
-              <p className="text-green-400 text-xs">✓ Connected successfully</p>
-            ) : connectionStatus === 'error' ? (
-              <p className="text-red-400 text-xs">✗ Connection failed - check credentials</p>
+              <><span className="text-green-400">✓</span><span className="text-green-400 text-sm">Connected successfully</span></>
             ) : (
-              <p className="text-ws-text-muted text-xs max-w-xs">
-                Configure the {storageSource === 's3' ? 'bucket' : 'container'} details above to connect.
-              </p>
+              <><span className="text-red-400">✗</span><span className="text-red-400 text-sm">Connection failed - check credentials</span></>
             )}
           </div>
         )}
