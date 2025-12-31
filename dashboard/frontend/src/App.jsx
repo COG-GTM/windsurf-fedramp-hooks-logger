@@ -33,7 +33,13 @@ import {
   Calendar,
   Activity,
   Sun,
-  Moon
+  Moon,
+  TrendingUp,
+  PieChart,
+  Users,
+  Target,
+  Cpu,
+  Database
 } from 'lucide-react';
 
 const API_BASE = '/api';
@@ -94,7 +100,7 @@ function App() {
   const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
   const [currentDir, setCurrentDir] = useState('/Users/chasedalton/CascadeProjects/windsurf-logger/logs');
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [viewMode, setViewMode] = useState('workflow'); // 'workflow', 'timeline', or 'list'
+  const [viewMode, setViewMode] = useState('workflow'); // 'workflow', 'timeline', 'list', or 'metrics'
   const [toasts, setToasts] = useState([]);
   const [selectedEntryIndex, setSelectedEntryIndex] = useState(-1);
   const [selectedSession, setSelectedSession] = useState(null);
@@ -629,6 +635,18 @@ function App() {
               <Layers className={`w-4 h-4 ${viewMode === 'list' ? 'text-white' : ''}`} aria-hidden="true" />
               List View
             </button>
+            <button
+              onClick={() => setViewMode('metrics')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
+                viewMode === 'metrics' 
+                  ? 'bg-ws-teal text-white shadow-md shadow-ws-teal/30' 
+                  : 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50'
+              }`}
+              aria-pressed={viewMode === 'metrics'}
+            >
+              <BarChart3 className={`w-4 h-4 ${viewMode === 'metrics' ? 'text-white' : ''}`} aria-hidden="true" />
+              Metrics Dashboard
+            </button>
           </div>
         </nav>
 
@@ -1032,6 +1050,13 @@ function App() {
         <div ref={logContainerRef} className="flex-1 overflow-auto p-6" key={viewMode} aria-busy={loading} aria-live="polite">
           {loading ? (
             <LoadingSkeleton />
+          ) : viewMode === 'metrics' ? (
+            <MetricsDashboard
+              stats={stats}
+              sessions={sessions}
+              logs={filteredLogs}
+              formatTimestamp={formatTimestamp}
+            />
           ) : viewMode === 'workflow' ? (
             <WorkflowView
               selectedSession={selectedSession}
@@ -1098,7 +1123,7 @@ function App() {
             )}
           </span>
           <div className="flex items-center gap-4">
-            <span>View: {viewMode === 'workflow' ? 'Workflow' : viewMode === 'timeline' ? 'Timeline' : 'List'}</span>
+            <span>View: {viewMode === 'workflow' ? 'Workflow' : viewMode === 'timeline' ? 'Timeline' : viewMode === 'metrics' ? 'Metrics' : 'List'}</span>
             <span>Last updated: {new Date().toLocaleTimeString()}</span>
           </div>
         </footer>
@@ -2031,6 +2056,432 @@ function MetadataItem({ label, value }) {
     <div>
       <dt className="text-ws-text-muted mb-0.5">{label}</dt>
       <dd className="text-ws-text-secondary truncate m-0" title={value}>{value}</dd>
+    </div>
+  );
+}
+
+function MetricsDashboard({ stats, sessions, logs, formatTimestamp }) {
+  // Compute metrics from data
+  const metrics = useMemo(() => {
+    const categoryBreakdown = stats?.categories || {};
+    const totalEvents = stats?.total_events || Object.values(categoryBreakdown).reduce((a, b) => a + b, 0);
+    
+    // Activity by hour of day
+    const hourlyActivity = Array(24).fill(0);
+    logs.forEach(log => {
+      if (log.timestamp) {
+        const hour = new Date(log.timestamp).getHours();
+        hourlyActivity[hour]++;
+      }
+    });
+    const maxHourly = Math.max(...hourlyActivity, 1);
+    
+    // Activity by day of week
+    const dailyActivity = Array(7).fill(0);
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    logs.forEach(log => {
+      if (log.timestamp) {
+        const day = new Date(log.timestamp).getDay();
+        dailyActivity[day]++;
+      }
+    });
+    const maxDaily = Math.max(...dailyActivity, 1);
+    
+    // Top modified files
+    const fileChanges = {};
+    logs.filter(l => l.category === 'file_write').forEach(log => {
+      const filePath = log.data?.file_path || log.file_path || 'unknown';
+      const fileName = filePath.split('/').pop();
+      fileChanges[fileName] = (fileChanges[fileName] || 0) + 1;
+    });
+    const topFiles = Object.entries(fileChanges)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8);
+    
+    // Top commands
+    const commandUsage = {};
+    logs.filter(l => l.category === 'command').forEach(log => {
+      const cmd = log.data?.command_line || log.command_line || 'unknown';
+      const cmdName = cmd.split(' ')[0];
+      commandUsage[cmdName] = (commandUsage[cmdName] || 0) + 1;
+    });
+    const topCommands = Object.entries(commandUsage)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6);
+    
+    // MCP tool usage
+    const mcpUsage = {};
+    logs.filter(l => l.category === 'mcp').forEach(log => {
+      const tool = log.data?.mcp_tool_name || log.data?.mcp_full_tool || 'unknown';
+      mcpUsage[tool] = (mcpUsage[tool] || 0) + 1;
+    });
+    const topMcpTools = Object.entries(mcpUsage)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6);
+    
+    // Session metrics
+    const avgEventsPerSession = sessions.length > 0 
+      ? Math.round(totalEvents / sessions.length) 
+      : 0;
+    
+    // Lines of code metrics
+    let totalLinesAdded = 0;
+    let totalLinesRemoved = 0;
+    logs.filter(l => l.category === 'file_write').forEach(log => {
+      totalLinesAdded += log.data?.total_lines_added || 0;
+      totalLinesRemoved += log.data?.total_lines_removed || 0;
+    });
+    
+    // Recent activity (last 7 days)
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const recentDays = [];
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      const dateStr = date.toISOString().split('T')[0];
+      const count = logs.filter(l => l.timestamp?.startsWith(dateStr)).length;
+      recentDays.push({
+        label: date.toLocaleDateString('en-US', { weekday: 'short' }),
+        date: dateStr,
+        count
+      });
+    }
+    const maxRecentDaily = Math.max(...recentDays.map(d => d.count), 1);
+    
+    return {
+      totalEvents,
+      categoryBreakdown,
+      hourlyActivity,
+      maxHourly,
+      dailyActivity,
+      dayNames,
+      maxDaily,
+      topFiles,
+      topCommands,
+      topMcpTools,
+      avgEventsPerSession,
+      totalLinesAdded,
+      totalLinesRemoved,
+      recentDays,
+      maxRecentDaily
+    };
+  }, [stats, sessions, logs]);
+
+  const categoryColors = {
+    prompt: { bg: 'bg-ws-teal', text: 'text-ws-teal', label: 'Prompts' },
+    file_write: { bg: 'bg-emerald-500', text: 'text-emerald-500', label: 'Code Changes' },
+    file_read: { bg: 'bg-ws-orange', text: 'text-ws-orange', label: 'File Reads' },
+    command: { bg: 'bg-amber-500', text: 'text-amber-500', label: 'Commands' },
+    mcp: { bg: 'bg-purple-500', text: 'text-purple-500', label: 'MCP Tools' }
+  };
+
+  return (
+    <div className="space-y-6 page-enter">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-ws-text">Metrics Dashboard</h2>
+          <p className="text-sm text-ws-text-muted mt-1">Analytics and insights from your Cascade activity</p>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-ws-text-muted">
+          <Database className="w-4 h-4" />
+          <span>{metrics.totalEvents.toLocaleString()} total events</span>
+        </div>
+      </div>
+
+      {/* Key Metrics Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 stagger-children">
+        <MetricCard
+          icon={<MessageSquare className="w-5 h-5" />}
+          label="Total Prompts"
+          value={stats?.categories?.prompt || 0}
+          color="teal"
+          trend={null}
+        />
+        <MetricCard
+          icon={<Edit3 className="w-5 h-5" />}
+          label="Code Changes"
+          value={stats?.categories?.file_write || 0}
+          color="emerald"
+          subValue={`+${metrics.totalLinesAdded} / -${metrics.totalLinesRemoved} lines`}
+        />
+        <MetricCard
+          icon={<Play className="w-5 h-5" />}
+          label="Commands Run"
+          value={stats?.categories?.command || 0}
+          color="amber"
+        />
+        <MetricCard
+          icon={<Users className="w-5 h-5" />}
+          label="Sessions"
+          value={stats?.unique_sessions || sessions.length}
+          color="purple"
+          subValue={`~${metrics.avgEventsPerSession} events/session`}
+        />
+      </div>
+
+      {/* Charts Row */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Recent Activity Chart */}
+        <div className="bg-ws-card border border-ws-border rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-ws-text flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-ws-teal" />
+              Recent Activity (7 Days)
+            </h3>
+          </div>
+          <div className="flex items-end justify-between gap-2 h-32">
+            {metrics.recentDays.map((day, idx) => (
+              <div key={idx} className="flex-1 flex flex-col items-center gap-2">
+                <div className="w-full bg-ws-bg rounded-t relative flex items-end justify-center" style={{ height: '100px' }}>
+                  <div
+                    className="w-full bg-gradient-to-t from-ws-teal to-ws-teal/60 rounded-t transition-all duration-500"
+                    style={{ height: `${(day.count / metrics.maxRecentDaily) * 100}%`, minHeight: day.count > 0 ? '4px' : '0' }}
+                  />
+                  {day.count > 0 && (
+                    <span className="absolute -top-5 text-xs text-ws-text-muted">{day.count}</span>
+                  )}
+                </div>
+                <span className="text-xs text-ws-text-muted">{day.label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Category Breakdown */}
+        <div className="bg-ws-card border border-ws-border rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-ws-text flex items-center gap-2">
+              <PieChart className="w-4 h-4 text-ws-teal" />
+              Event Categories
+            </h3>
+          </div>
+          <div className="space-y-3">
+            {Object.entries(metrics.categoryBreakdown)
+              .filter(([cat]) => categoryColors[cat])
+              .sort((a, b) => b[1] - a[1])
+              .map(([category, count]) => {
+                const config = categoryColors[category];
+                const percentage = metrics.totalEvents > 0 ? (count / metrics.totalEvents * 100).toFixed(1) : 0;
+                return (
+                  <div key={category} className="group">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-sm ${config.text}`}>{config.label}</span>
+                      <span className="text-sm text-ws-text-muted">{count} ({percentage}%)</span>
+                    </div>
+                    <div className="h-2 bg-ws-bg rounded-full overflow-hidden">
+                      <div
+                        className={`h-full ${config.bg} rounded-full transition-all duration-700`}
+                        style={{ width: `${percentage}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      </div>
+
+      {/* Activity Heatmaps */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Hourly Activity */}
+        <div className="bg-ws-card border border-ws-border rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-ws-text flex items-center gap-2">
+              <Clock className="w-4 h-4 text-ws-teal" />
+              Activity by Hour
+            </h3>
+          </div>
+          <div className="grid grid-cols-12 gap-1">
+            {metrics.hourlyActivity.map((count, hour) => {
+              const intensity = count / metrics.maxHourly;
+              return (
+                <div
+                  key={hour}
+                  className="aspect-square rounded flex items-center justify-center text-xs relative group cursor-default"
+                  style={{
+                    backgroundColor: `rgba(0, 212, 170, ${intensity * 0.8 + 0.1})`
+                  }}
+                  title={`${hour}:00 - ${count} events`}
+                >
+                  <span className="text-[10px] text-white/80">{hour}</span>
+                  <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-ws-card border border-ws-border rounded px-2 py-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10 shadow-lg">
+                    {hour}:00 - {count} events
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex justify-between mt-2 text-xs text-ws-text-muted">
+            <span>12 AM</span>
+            <span>12 PM</span>
+            <span>11 PM</span>
+          </div>
+        </div>
+
+        {/* Daily Activity */}
+        <div className="bg-ws-card border border-ws-border rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-ws-text flex items-center gap-2">
+              <Calendar className="w-4 h-4 text-ws-teal" />
+              Activity by Day of Week
+            </h3>
+          </div>
+          <div className="space-y-2">
+            {metrics.dayNames.map((day, idx) => {
+              const count = metrics.dailyActivity[idx];
+              const percentage = (count / metrics.maxDaily) * 100;
+              return (
+                <div key={day} className="flex items-center gap-3">
+                  <span className="text-xs text-ws-text-muted w-8">{day}</span>
+                  <div className="flex-1 h-6 bg-ws-bg rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-ws-teal to-ws-teal/60 rounded-full transition-all duration-700 flex items-center justify-end pr-2"
+                      style={{ width: `${Math.max(percentage, count > 0 ? 5 : 0)}%` }}
+                    >
+                      {count > 0 && <span className="text-xs text-white font-medium">{count}</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Lists Row */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* Top Modified Files */}
+        <div className="bg-ws-card border border-ws-border rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-ws-text flex items-center gap-2">
+              <FileCode className="w-4 h-4 text-ws-teal" />
+              Top Modified Files
+            </h3>
+          </div>
+          {metrics.topFiles.length > 0 ? (
+            <div className="space-y-2">
+              {metrics.topFiles.map(([file, count], idx) => (
+                <div key={file} className="flex items-center gap-3 group">
+                  <span className="text-xs text-ws-text-muted w-4">{idx + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-ws-text-secondary truncate font-mono" title={file}>{file}</p>
+                  </div>
+                  <span className="text-xs text-ws-teal font-medium">{count}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-ws-text-muted text-center py-4">No file changes recorded</p>
+          )}
+        </div>
+
+        {/* Top Commands */}
+        <div className="bg-ws-card border border-ws-border rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-ws-text flex items-center gap-2">
+              <Terminal className="w-4 h-4 text-ws-orange" />
+              Top Commands
+            </h3>
+          </div>
+          {metrics.topCommands.length > 0 ? (
+            <div className="space-y-2">
+              {metrics.topCommands.map(([cmd, count], idx) => (
+                <div key={cmd} className="flex items-center gap-3">
+                  <span className="text-xs text-ws-text-muted w-4">{idx + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-ws-text-secondary truncate font-mono">{cmd}</p>
+                  </div>
+                  <span className="text-xs text-ws-orange font-medium">{count}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-ws-text-muted text-center py-4">No commands recorded</p>
+          )}
+        </div>
+
+        {/* Top MCP Tools */}
+        <div className="bg-ws-card border border-ws-border rounded-xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-ws-text flex items-center gap-2">
+              <Zap className="w-4 h-4 text-purple-500" />
+              Top MCP Tools
+            </h3>
+          </div>
+          {metrics.topMcpTools.length > 0 ? (
+            <div className="space-y-2">
+              {metrics.topMcpTools.map(([tool, count], idx) => (
+                <div key={tool} className="flex items-center gap-3">
+                  <span className="text-xs text-ws-text-muted w-4">{idx + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-ws-text-secondary truncate">{tool}</p>
+                  </div>
+                  <span className="text-xs text-purple-500 font-medium">{count}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-ws-text-muted text-center py-4">No MCP tools used</p>
+          )}
+        </div>
+      </div>
+
+      {/* Code Impact Summary */}
+      <div className="bg-gradient-to-r from-ws-card to-ws-bg border border-ws-border rounded-xl p-6">
+        <div className="flex items-center gap-4 mb-4">
+          <div className="w-12 h-12 rounded-xl bg-ws-teal/10 flex items-center justify-center">
+            <Target className="w-6 h-6 text-ws-teal" />
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-ws-text">Code Impact Summary</h3>
+            <p className="text-sm text-ws-text-muted">Aggregate statistics from all logged sessions</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+          <div className="text-center">
+            <p className="text-3xl font-bold text-ws-teal">{metrics.totalLinesAdded.toLocaleString()}</p>
+            <p className="text-xs text-ws-text-muted mt-1">Lines Added</p>
+          </div>
+          <div className="text-center">
+            <p className="text-3xl font-bold text-red-400">{metrics.totalLinesRemoved.toLocaleString()}</p>
+            <p className="text-xs text-ws-text-muted mt-1">Lines Removed</p>
+          </div>
+          <div className="text-center">
+            <p className="text-3xl font-bold text-ws-text">{(metrics.totalLinesAdded - metrics.totalLinesRemoved).toLocaleString()}</p>
+            <p className="text-xs text-ws-text-muted mt-1">Net Change</p>
+          </div>
+          <div className="text-center">
+            <p className="text-3xl font-bold text-ws-orange">{metrics.topFiles.length}</p>
+            <p className="text-xs text-ws-text-muted mt-1">Unique Files</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MetricCard({ icon, label, value, color, subValue, trend }) {
+  const colorClasses = {
+    teal: 'bg-ws-teal/10 text-ws-teal',
+    emerald: 'bg-emerald-500/10 text-emerald-500',
+    amber: 'bg-amber-500/10 text-amber-500',
+    purple: 'bg-purple-500/10 text-purple-500',
+    orange: 'bg-ws-orange/10 text-ws-orange'
+  };
+
+  return (
+    <div className="bg-ws-card border border-ws-border rounded-xl p-4 hover:border-ws-border-light transition-colors">
+      <div className="flex items-center gap-3 mb-3">
+        <div className={`w-10 h-10 rounded-lg ${colorClasses[color]} flex items-center justify-center`}>
+          {icon}
+        </div>
+        <span className="text-sm text-ws-text-muted">{label}</span>
+      </div>
+      <p className="text-2xl font-bold text-ws-text">{value.toLocaleString()}</p>
+      {subValue && (
+        <p className="text-xs text-ws-text-muted mt-1">{subValue}</p>
+      )}
     </div>
   );
 }
