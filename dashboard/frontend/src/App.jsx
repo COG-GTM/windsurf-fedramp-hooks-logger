@@ -2491,13 +2491,23 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState(null); // 'success', 'error', or null
 
-  // Fetch env file info on mount
+  // Fetch env file info on mount and when env guide opens
   useEffect(() => {
     fetch(`${API_BASE}/config/env-info`)
       .then(res => res.json())
       .then(data => setEnvInfo(data))
       .catch(() => {});
   }, []);
+
+  // Re-fetch env info when env guide modal opens
+  useEffect(() => {
+    if (showEnvGuide) {
+      fetch(`${API_BASE}/config/env-info`)
+        .then(res => res.json())
+        .then(data => setEnvInfo(data))
+        .catch(() => {});
+    }
+  }, [showEnvGuide]);
 
   const fetchDirectories = async (dir) => {
     setLoading(true);
