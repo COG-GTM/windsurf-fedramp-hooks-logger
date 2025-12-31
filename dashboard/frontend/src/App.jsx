@@ -1128,10 +1128,10 @@ function App() {
         {/* Footer */}
         <footer className="bg-ws-sidebar border-t border-ws-border px-6 py-2 flex items-center justify-between text-xs text-ws-text-muted">
           <span>
-            {filteredLogs.length} {filteredLogs.length === 1 ? 'entry' : 'entries'}
-            {(filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || searchQuery || dateFrom || dateTo) && (
-              <span className="text-ws-teal ml-1">(filtered)</span>
-            )}
+            {viewMode === 'metrics' 
+              ? `${(aggregatedMetrics?.total_events || 0).toLocaleString()} total events`
+              : `${filteredLogs.length} ${filteredLogs.length === 1 ? 'entry' : 'entries'}${(filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || searchQuery || dateFrom || dateTo) ? ' (filtered)' : ''}`
+            }
           </span>
           <div className="flex items-center gap-4">
             <span>View: {viewMode === 'workflow' ? 'Workflow' : viewMode === 'timeline' ? 'Timeline' : viewMode === 'metrics' ? 'Metrics' : 'List'}</span>
