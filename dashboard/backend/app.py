@@ -1432,24 +1432,28 @@ def reveal_env_file():
             except Exception as e:
                 return jsonify({"success": False, "message": f"Could not create .env: {e}"})
         else:
-            # Create empty .env
+            # Create .env with template
             try:
-                env_path.touch()
+                template = "# Windsurf Logger Configuration\n# Add your credentials here\n"
+                env_path.write_text(template)
             except Exception as e:
                 return jsonify({"success": False, "message": f"Could not create .env: {e}"})
     
     try:
         system = platform.system()
         if system == 'Darwin':  # macOS
-            subprocess.run(['open', '-R', str(env_path)], check=True)
+            # Use Popen to avoid blocking and don't check return code
+            subprocess.Popen(['open', '-R', str(env_path)])
         elif system == 'Windows':
-            subprocess.run(['explorer', '/select,', str(env_path)], check=True)
+            subprocess.Popen(['explorer', '/select,', str(env_path)])
         else:  # Linux
-            subprocess.run(['xdg-open', str(env_path.parent)], check=True)
+            subprocess.Popen(['xdg-open', str(env_path.parent)])
         
         return jsonify({"success": True, "path": str(env_path)})
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "message": f"Command not found: {e}"})
     except Exception as e:
-        return jsonify({"success": False, "message": f"Could not open location: {e}"})
+        return jsonify({"success": False, "message": f"Could not open location: {type(e).__name__}: {e}"})
 
 
 @app.route('/api/config/open-env', methods=['POST'])
@@ -1497,21 +1501,19 @@ def open_env_file():
     try:
         system = platform.system()
         if system == 'Darwin':  # macOS
-            subprocess.run(['open', str(env_path)], check=True)
+            # Use Popen to avoid blocking
+            subprocess.Popen(['open', str(env_path)])
         elif system == 'Windows':
-            subprocess.run(['notepad', str(env_path)], check=True)
+            subprocess.Popen(['notepad', str(env_path)])
         else:  # Linux
-            # Try common editors
-            for editor in ['xdg-open', 'gedit', 'nano', 'vim']:
-                try:
-                    subprocess.run([editor, str(env_path)], check=True)
-                    break
-                except:
-                    continue
+            # Try xdg-open first
+            subprocess.Popen(['xdg-open', str(env_path)])
         
         return jsonify({"success": True, "path": str(env_path)})
+    except FileNotFoundError as e:
+        return jsonify({"success": False, "message": f"Command not found: {e}"})
     except Exception as e:
-        return jsonify({"success": False, "message": f"Could not open file: {e}"})
+        return jsonify({"success": False, "message": f"Could not open file: {type(e).__name__}: {e}"})
 
 
 # ============================================================================
