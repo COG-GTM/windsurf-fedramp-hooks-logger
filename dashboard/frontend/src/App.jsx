@@ -84,6 +84,7 @@ function App() {
   const [logs, setLogs] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [stats, setStats] = useState(null);
+  const [aggregatedMetrics, setAggregatedMetrics] = useState(null);
   const [files, setFiles] = useState([]);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -172,6 +173,16 @@ function App() {
       setStats(data);
     } catch (err) {
       console.error('Failed to fetch stats:', err);
+    }
+  }, [currentDir]);
+
+  const fetchAggregatedMetrics = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/logs/metrics?dir=${encodeURIComponent(currentDir)}`);
+      const data = await res.json();
+      setAggregatedMetrics(data);
+    } catch (err) {
+      console.error('Failed to fetch aggregated metrics:', err);
     }
   }, [currentDir]);
 
@@ -288,6 +299,7 @@ function App() {
     await Promise.all([
       fetchFiles(currentDir),
       fetchStats(),
+      fetchAggregatedMetrics(),
       fetchSessions(),
       fetchLogs()
     ]);
@@ -359,8 +371,9 @@ function App() {
   useEffect(() => {
     fetchFiles(currentDir);
     fetchStats();
+    fetchAggregatedMetrics();
     fetchSessions();
-  }, [currentDir, fetchFiles, fetchStats, fetchSessions]);
+  }, [currentDir, fetchFiles, fetchStats, fetchAggregatedMetrics, fetchSessions]);
 
   useEffect(() => {
     fetchLogs();
@@ -1052,11 +1065,8 @@ function App() {
             <LoadingSkeleton />
           ) : viewMode === 'metrics' ? (
             <MetricsDashboard
-              stats={stats}
-              sessions={sessions}
-              logs={filteredLogs}
+              aggregatedMetrics={aggregatedMetrics}
               formatTimestamp={formatTimestamp}
-              hasActiveFilters={filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || searchQuery || dateFrom || dateTo}
             />
           ) : viewMode === 'workflow' ? (
             <WorkflowView
@@ -2061,128 +2071,56 @@ function MetadataItem({ label, value }) {
   );
 }
 
-function MetricsDashboard({ stats, sessions, logs, formatTimestamp, hasActiveFilters }) {
-  // Compute ALL metrics from filtered logs data for consistency
+function MetricsDashboard({ aggregatedMetrics, formatTimestamp }) {
+  // Use server-provided metrics (computed from ALL log entries)
   const metrics = useMemo(() => {
-    // Build category breakdown from filtered logs (not from stats which is unfiltered)
-    const categoryBreakdown = {};
-    logs.forEach(log => {
-      const cat = log.category || log.type || 'unknown';
-      categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + 1;
-    });
-    const totalEvents = logs.length;
-    
-    // Activity by hour of day
-    const hourlyActivity = Array(24).fill(0);
-    logs.forEach(log => {
-      if (log.timestamp) {
-        const hour = new Date(log.timestamp).getHours();
-        hourlyActivity[hour]++;
-      }
-    });
-    const maxHourly = Math.max(...hourlyActivity, 1);
-    
-    // Activity by day of week
-    const dailyActivity = Array(7).fill(0);
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    logs.forEach(log => {
-      if (log.timestamp) {
-        const day = new Date(log.timestamp).getDay();
-        dailyActivity[day]++;
-      }
-    });
-    const maxDaily = Math.max(...dailyActivity, 1);
-    
-    // Top modified files - track all unique files
-    const fileChanges = {};
-    logs.filter(l => l.category === 'file_write' || l.type === 'file_write').forEach(log => {
-      const filePath = log.data?.file_path || log.file_path || 'unknown';
-      const fileName = filePath.split('/').pop();
-      fileChanges[fileName] = (fileChanges[fileName] || 0) + 1;
-    });
-    const uniqueFilesCount = Object.keys(fileChanges).length;
-    const topFiles = Object.entries(fileChanges)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 8);
-    
-    // Top commands
-    const commandUsage = {};
-    logs.filter(l => l.category === 'command' || l.type === 'command').forEach(log => {
-      const cmd = log.data?.command_line || log.command_line || 'unknown';
-      const cmdName = cmd.split(' ')[0];
-      commandUsage[cmdName] = (commandUsage[cmdName] || 0) + 1;
-    });
-    const topCommands = Object.entries(commandUsage)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6);
-    
-    // MCP tool usage
-    const mcpUsage = {};
-    logs.filter(l => l.category === 'mcp' || l.type === 'mcp').forEach(log => {
-      const tool = log.data?.mcp_tool_name || log.data?.mcp_full_tool || 'unknown';
-      mcpUsage[tool] = (mcpUsage[tool] || 0) + 1;
-    });
-    const topMcpTools = Object.entries(mcpUsage)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6);
-    
-    // Unique sessions from filtered logs
-    const uniqueSessionIds = new Set();
-    logs.forEach(log => {
-      if (log.trajectory_id) {
-        uniqueSessionIds.add(log.trajectory_id);
-      }
-    });
-    const filteredSessionCount = uniqueSessionIds.size || 1; // Avoid division by zero
-    
-    // Session metrics from filtered data
-    const avgEventsPerSession = filteredSessionCount > 0 
-      ? Math.round(totalEvents / filteredSessionCount) 
-      : 0;
-    
-    // Lines of code metrics
-    let totalLinesAdded = 0;
-    let totalLinesRemoved = 0;
-    logs.filter(l => l.category === 'file_write' || l.type === 'file_write').forEach(log => {
-      totalLinesAdded += log.data?.total_lines_added || 0;
-      totalLinesRemoved += log.data?.total_lines_removed || 0;
-    });
-    
-    // Recent activity (last 7 days)
-    const now = new Date();
-    const recentDays = [];
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
-      const dateStr = date.toISOString().split('T')[0];
-      const count = logs.filter(l => l.timestamp?.startsWith(dateStr)).length;
-      recentDays.push({
-        label: date.toLocaleDateString('en-US', { weekday: 'short' }),
-        date: dateStr,
-        count
-      });
+    if (!aggregatedMetrics) {
+      return {
+        totalEvents: 0,
+        categoryBreakdown: {},
+        hourlyActivity: Array(24).fill(0),
+        dailyActivity: Array(7).fill(0),
+        recentDays: [],
+        topFiles: [],
+        topCommands: [],
+        topMcpTools: [],
+        uniqueSessions: 0,
+        totalLinesAdded: 0,
+        totalLinesRemoved: 0,
+        uniqueFilesCount: 0,
+        dateRange: { start: null, end: null }
+      };
     }
-    const maxRecentDaily = Math.max(...recentDays.map(d => d.count), 1);
+    
+    // Convert server data to component format
+    const hourlyActivity = aggregatedMetrics.hourly_activity || Array(24).fill(0);
+    // Backend returns Monday=0, frontend expects Sunday=0, so rotate array
+    const serverDaily = aggregatedMetrics.daily_activity || Array(7).fill(0);
+    const dailyActivity = [serverDaily[6], ...serverDaily.slice(0, 6)]; // Rotate: Mon-Sun -> Sun-Sat
     
     return {
-      totalEvents,
-      categoryBreakdown,
+      totalEvents: aggregatedMetrics.total_events || 0,
+      categoryBreakdown: aggregatedMetrics.categories || {},
       hourlyActivity,
-      maxHourly,
+      maxHourly: Math.max(...hourlyActivity, 1),
       dailyActivity,
-      dayNames,
-      maxDaily,
-      topFiles,
-      topCommands,
-      topMcpTools,
-      avgEventsPerSession,
-      totalLinesAdded,
-      totalLinesRemoved,
-      recentDays,
-      maxRecentDaily,
-      uniqueFilesCount,
-      filteredSessionCount
+      dayNames: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+      maxDaily: Math.max(...dailyActivity, 1),
+      topFiles: (aggregatedMetrics.top_files || []).map(f => [f.name, f.count]),
+      topCommands: (aggregatedMetrics.top_commands || []).map(c => [c.name, c.count]),
+      topMcpTools: (aggregatedMetrics.top_mcp_tools || []).map(t => [t.name, t.count]),
+      recentDays: aggregatedMetrics.recent_days || [],
+      maxRecentDaily: Math.max(...(aggregatedMetrics.recent_days || []).map(d => d.count), 1),
+      uniqueSessions: aggregatedMetrics.unique_sessions || 0,
+      totalLinesAdded: aggregatedMetrics.total_lines_added || 0,
+      totalLinesRemoved: aggregatedMetrics.total_lines_removed || 0,
+      uniqueFilesCount: aggregatedMetrics.unique_files_count || 0,
+      dateRange: aggregatedMetrics.date_range || { start: null, end: null },
+      avgEventsPerSession: aggregatedMetrics.unique_sessions > 0 
+        ? Math.round((aggregatedMetrics.total_events || 0) / aggregatedMetrics.unique_sessions)
+        : 0
     };
-  }, [logs]);
+  }, [aggregatedMetrics]);
 
   const categoryColors = {
     prompt: { bg: 'bg-ws-teal', text: 'text-ws-teal', label: 'Prompts' },
@@ -2192,6 +2130,16 @@ function MetricsDashboard({ stats, sessions, logs, formatTimestamp, hasActiveFil
     mcp: { bg: 'bg-purple-500', text: 'text-purple-500', label: 'MCP Tools' }
   };
 
+  // Loading state
+  if (!aggregatedMetrics) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-ws-text-muted">
+        <div className="rounded-full h-8 w-8 border-2 border-ws-teal border-t-transparent spinner-smooth mb-4"></div>
+        <p className="text-sm">Loading metrics...</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 page-enter">
       {/* Header */}
@@ -2199,41 +2147,36 @@ function MetricsDashboard({ stats, sessions, logs, formatTimestamp, hasActiveFil
         <div>
           <h2 className="text-2xl font-bold text-ws-text">Metrics Dashboard</h2>
           <p className="text-sm text-ws-text-muted mt-1">
-            Analytics and insights from your Cascade activity
-            {hasActiveFilters && <span className="text-ws-teal ml-2">(filtered view)</span>}
+            Complete analytics from all historical Cascade activity
           </p>
         </div>
         <div className="flex items-center gap-3 text-xs text-ws-text-muted">
-          {hasActiveFilters && (
-            <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal rounded-full flex items-center gap-1">
-              <Filter className="w-3 h-3" />
-              Filters Active
+          {metrics.dateRange.start && (
+            <span className="px-2 py-1 bg-ws-card border border-ws-border rounded-full">
+              {new Date(metrics.dateRange.start).toLocaleDateString()} - {new Date(metrics.dateRange.end).toLocaleDateString()}
             </span>
           )}
           <div className="flex items-center gap-2">
             <Database className="w-4 h-4" />
-            <span>{metrics.totalEvents.toLocaleString()} {hasActiveFilters ? 'filtered' : 'total'} events</span>
+            <span>{metrics.totalEvents.toLocaleString()} total events</span>
           </div>
         </div>
       </div>
 
       {/* Empty state for no data */}
-      {logs.length === 0 && (
+      {metrics.totalEvents === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-ws-text-muted">
           <BarChart3 className="w-16 h-16 mb-4 opacity-50" />
           <h3 className="text-lg font-semibold text-ws-text mb-2">No Data Available</h3>
           <p className="text-sm text-center max-w-md">
-            {hasActiveFilters 
-              ? 'No events match your current filters. Try adjusting or clearing them to see metrics.'
-              : 'No log events found. Start using Cascade to generate activity data.'}
+            No log events found. Start using Cascade to generate activity data.
           </p>
         </div>
       )}
 
-      {logs.length > 0 && (
+      {metrics.totalEvents > 0 && (
         <>
-
-      {/* Key Metrics Cards - All computed from filtered logs */}
+      {/* Key Metrics Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 stagger-children">
         <MetricCard
           icon={<MessageSquare className="w-5 h-5" />}
@@ -2258,7 +2201,7 @@ function MetricsDashboard({ stats, sessions, logs, formatTimestamp, hasActiveFil
         <MetricCard
           icon={<Users className="w-5 h-5" />}
           label="Sessions"
-          value={metrics.filteredSessionCount}
+          value={metrics.uniqueSessions}
           color="purple"
           subValue={`~${metrics.avgEventsPerSession} events/session`}
         />
