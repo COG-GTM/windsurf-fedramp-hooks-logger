@@ -606,6 +606,7 @@ function App() {
                         </div>
                         <div className="flex items-center gap-2 text-[10px] text-ws-text-muted">
                           <span>{session.event_count} events</span>
+                          <span>{session.categories?.prompt || 0} prompts</span>
                           {(session.categories?.file_write || 0) > 0 && (
                             <span>{session.categories?.file_write} changes</span>
                           )}
