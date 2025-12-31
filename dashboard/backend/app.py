@@ -10,11 +10,19 @@ import io
 import sys
 import time
 import threading
+import subprocess
+import platform
 from pathlib import Path
 from datetime import datetime, timedelta
 from functools import wraps
 from collections import OrderedDict
 from typing import Optional, Dict, List, Any, Generator
+
+# Import storage adapters
+from storage_adapters import (
+    get_storage_adapter, configure_storage, get_current_storage_config,
+    reset_storage, LocalStorageAdapter, HAS_BOTO3, HAS_AZURE
+)
 
 # Add parent directory to path for config import
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -419,14 +427,73 @@ def count_log_entries(filepath: str) -> int:
 
 
 # ============================================================================
+# Helper Functions for Storage-Aware Operations
+# ============================================================================
+def is_remote_storage_path(path: str) -> bool:
+    """Check if a path is a remote storage URI (s3:// or azure://)."""
+    return path.startswith('s3://') or path.startswith('azure://')
+
+
+def get_active_adapter():
+    """Get the currently active storage adapter (remote or local)."""
+    config = get_current_storage_config()
+    if config:
+        return get_storage_adapter(config)
+    return None
+
+
+def read_remote_file_content(adapter, filepath: str) -> str:
+    """Read file content using the storage adapter."""
+    return adapter.read_file(filepath)
+
+
+def parse_remote_jsonl_content(content: str) -> List[Dict]:
+    """Parse JSONL content string into entries."""
+    entries = []
+    for line in content.strip().split('\n'):
+        line = line.strip()
+        if line:
+            try:
+                entry = json.loads(line)
+                entries.append(normalize_entry(entry))
+            except json.JSONDecodeError:
+                continue
+    return entries
+
+
+# ============================================================================
 # API Endpoints
 # ============================================================================
 @app.route('/api/logs/files', methods=['GET'])
 @rate_limit
 def get_log_files():
-    """Get list of available log files in a directory."""
+    """Get list of available log files in a directory or remote storage."""
     log_dir = request.args.get('dir', DEFAULT_LOG_DIR)
     
+    # Check if using remote storage
+    if is_remote_storage_path(log_dir):
+        adapter = get_active_adapter()
+        if adapter is None:
+            return jsonify({"error": "Remote storage not configured"}), 400
+        
+        cache_key = f"files:{log_dir}"
+        cached = cache.get(cache_key)
+        if cached:
+            return jsonify(cached)
+        
+        try:
+            files = adapter.list_files()
+            # Add entry count estimation (limited for remote to avoid excessive reads)
+            for f in files[:20]:  # Only count entries for first 20 files
+                f['entries'] = 0  # Will be populated on demand
+            
+            result = {"files": files, "directory": log_dir, "storage_type": get_current_storage_config().get('type', 'remote')}
+            cache.set(cache_key, result)
+            return jsonify(result)
+        except Exception as e:
+            return jsonify({"error": f"Error reading remote storage: {str(e)}"}), 500
+    
+    # Local storage path
     # Security: Validate path
     if not validate_path(log_dir):
         return jsonify({"error": "Access denied to this directory"}), 403
@@ -459,7 +526,7 @@ def get_log_files():
         return jsonify({"error": f"Error reading directory: {str(e)}"}), 500
     
     files.sort(key=lambda x: x['modified'], reverse=True)
-    result = {"files": files, "directory": log_dir}
+    result = {"files": files, "directory": log_dir, "storage_type": "local"}
     cache.set(cache_key, result)
     return jsonify(result)
 
@@ -480,28 +547,59 @@ def get_log_data():
     date_from = request.args.get('date_from')
     date_to = request.args.get('date_to')
     
-    if not filepaths:
-        filepaths = [os.path.join(DEFAULT_LOG_DIR, 'all_events.jsonl')]
+    # Check for remote storage
+    adapter = get_active_adapter()
+    storage_config = get_current_storage_config()
+    using_remote = storage_config is not None and storage_config.get('type') in ('s3', 'azure')
     
-    # Validate all paths
-    for filepath in filepaths:
-        if not validate_path(filepath):
-            return jsonify({"error": f"Access denied: {filepath}"}), 403
+    if not filepaths:
+        if using_remote:
+            # For remote storage, try to find all_events.jsonl in the configured location
+            try:
+                files = adapter.list_files()
+                all_events = next((f for f in files if f['name'] == 'all_events.jsonl'), None)
+                if all_events:
+                    filepaths = [all_events.get('s3_key') or all_events.get('blob_name') or all_events['path']]
+                else:
+                    # Use first available file
+                    filepaths = [files[0].get('s3_key') or files[0].get('blob_name') or files[0]['path']] if files else []
+            except:
+                filepaths = []
+        else:
+            filepaths = [os.path.join(DEFAULT_LOG_DIR, 'all_events.jsonl')]
     
     all_entries = []
     
     for filepath in filepaths:
-        if not os.path.exists(filepath):
+        try:
+            if using_remote:
+                # Read from remote storage
+                content = adapter.read_file(filepath)
+                if filepath.endswith('.jsonl') or 'jsonl' in filepath:
+                    entries = parse_remote_jsonl_content(content)
+                else:
+                    # For text logs, we'd need to parse differently
+                    entries = []
+                source_name = filepath.split('/')[-1]
+            else:
+                # Local storage
+                if not validate_path(filepath):
+                    continue
+                if not os.path.exists(filepath):
+                    continue
+                
+                if filepath.endswith('.jsonl'):
+                    entries = parse_jsonl_file(filepath)
+                else:
+                    entries = parse_text_log(filepath)
+                source_name = os.path.basename(filepath)
+            
+            for entry in entries:
+                entry['source_file'] = source_name
+            all_entries.extend(entries)
+        except Exception as e:
+            app.logger.error(f"Error reading file {filepath}: {e}")
             continue
-        
-        if filepath.endswith('.jsonl'):
-            entries = parse_jsonl_file(filepath)
-        else:
-            entries = parse_text_log(filepath)
-        
-        for entry in entries:
-            entry['source_file'] = os.path.basename(filepath)
-        all_entries.extend(entries)
     
     # Apply filters
     filtered_entries = []
@@ -581,14 +679,32 @@ def get_stats():
         "categories": {}
     }
     
-    # Try new format first, fall back to old
-    all_events_path = os.path.join(log_dir, 'all_events.jsonl')
-    consolidated_path = os.path.join(log_dir, 'consolidated.jsonl')
+    # Check for remote storage
+    adapter = get_active_adapter()
+    storage_config = get_current_storage_config()
+    using_remote = storage_config is not None and storage_config.get('type') in ('s3', 'azure')
     
-    log_path = all_events_path if os.path.exists(all_events_path) else consolidated_path
+    entries = []
+    if using_remote:
+        try:
+            files = adapter.list_files()
+            all_events = next((f for f in files if f['name'] == 'all_events.jsonl'), None)
+            if all_events:
+                key = all_events.get('s3_key') or all_events.get('blob_name') or all_events['path']
+                content = adapter.read_file(key)
+                entries = parse_remote_jsonl_content(content)
+        except Exception as e:
+            app.logger.error(f"Error reading remote stats: {e}")
+    else:
+        # Local storage - try new format first, fall back to old
+        all_events_path = os.path.join(log_dir, 'all_events.jsonl')
+        consolidated_path = os.path.join(log_dir, 'consolidated.jsonl')
+        log_path = all_events_path if os.path.exists(all_events_path) else consolidated_path
+        
+        if os.path.exists(log_path):
+            entries = parse_jsonl_file(log_path)
     
-    if os.path.exists(log_path):
-        entries = parse_jsonl_file(log_path)
+    if entries:
         
         timestamps = []
         for entry in entries:
@@ -769,14 +885,32 @@ def get_sessions():
     """Get all sessions with their events grouped."""
     log_dir = request.args.get('dir', DEFAULT_LOG_DIR)
     
-    all_events_path = os.path.join(log_dir, 'all_events.jsonl')
-    consolidated_path = os.path.join(log_dir, 'consolidated.jsonl')
-    log_path = all_events_path if os.path.exists(all_events_path) else consolidated_path
+    # Check for remote storage
+    adapter = get_active_adapter()
+    storage_config = get_current_storage_config()
+    using_remote = storage_config is not None and storage_config.get('type') in ('s3', 'azure')
     
-    if not os.path.exists(log_path):
-        return jsonify({"sessions": []})
-    
-    entries = parse_jsonl_file(log_path)
+    entries = []
+    if using_remote:
+        try:
+            files = adapter.list_files()
+            all_events = next((f for f in files if f['name'] == 'all_events.jsonl'), None)
+            if all_events:
+                key = all_events.get('s3_key') or all_events.get('blob_name') or all_events['path']
+                content = adapter.read_file(key)
+                entries = parse_remote_jsonl_content(content)
+        except Exception as e:
+            app.logger.error(f"Error reading remote sessions: {e}")
+            return jsonify({"sessions": [], "error": str(e)})
+    else:
+        all_events_path = os.path.join(log_dir, 'all_events.jsonl')
+        consolidated_path = os.path.join(log_dir, 'consolidated.jsonl')
+        log_path = all_events_path if os.path.exists(all_events_path) else consolidated_path
+        
+        if not os.path.exists(log_path):
+            return jsonify({"sessions": []})
+        
+        entries = parse_jsonl_file(log_path)
     
     # Group by trajectory_id
     sessions = {}
@@ -827,28 +961,51 @@ def get_metrics():
     """Get comprehensive metrics aggregated from ALL log entries."""
     log_dir = request.args.get('dir', DEFAULT_LOG_DIR)
     
-    all_events_path = os.path.join(log_dir, 'all_events.jsonl')
-    consolidated_path = os.path.join(log_dir, 'consolidated.jsonl')
-    log_path = all_events_path if os.path.exists(all_events_path) else consolidated_path
+    empty_response = {
+        "total_events": 0,
+        "categories": {},
+        "hourly_activity": [0] * 24,
+        "daily_activity": [0] * 7,
+        "recent_days": [],
+        "top_files": [],
+        "top_commands": [],
+        "top_mcp_tools": [],
+        "unique_sessions": 0,
+        "total_lines_added": 0,
+        "total_lines_removed": 0,
+        "unique_files_count": 0,
+        "date_range": {"start": None, "end": None}
+    }
     
-    if not os.path.exists(log_path):
-        return jsonify({
-            "total_events": 0,
-            "categories": {},
-            "hourly_activity": [0] * 24,
-            "daily_activity": [0] * 7,
-            "recent_days": [],
-            "top_files": [],
-            "top_commands": [],
-            "top_mcp_tools": [],
-            "unique_sessions": 0,
-            "total_lines_added": 0,
-            "total_lines_removed": 0,
-            "unique_files_count": 0,
-            "date_range": {"start": None, "end": None}
-        })
+    # Check for remote storage
+    adapter = get_active_adapter()
+    storage_config = get_current_storage_config()
+    using_remote = storage_config is not None and storage_config.get('type') in ('s3', 'azure')
     
-    entries = parse_jsonl_file(log_path)
+    entries = []
+    if using_remote:
+        try:
+            files = adapter.list_files()
+            all_events = next((f for f in files if f['name'] == 'all_events.jsonl'), None)
+            if all_events:
+                key = all_events.get('s3_key') or all_events.get('blob_name') or all_events['path']
+                content = adapter.read_file(key)
+                entries = parse_remote_jsonl_content(content)
+        except Exception as e:
+            app.logger.error(f"Error reading remote metrics: {e}")
+            return jsonify(empty_response)
+    else:
+        all_events_path = os.path.join(log_dir, 'all_events.jsonl')
+        consolidated_path = os.path.join(log_dir, 'consolidated.jsonl')
+        log_path = all_events_path if os.path.exists(all_events_path) else consolidated_path
+        
+        if not os.path.exists(log_path):
+            return jsonify(empty_response)
+        
+        entries = parse_jsonl_file(log_path)
+    
+    if not entries:
+        return jsonify(empty_response)
     
     # Initialize aggregations
     categories = {}
@@ -1125,6 +1282,236 @@ def clear_cache():
     """Clear the API cache."""
     cache.invalidate()
     return jsonify({"status": "ok", "message": "Cache cleared"})
+
+
+# ============================================================================
+# Storage Configuration Endpoints
+# ============================================================================
+@app.route('/api/storage/test', methods=['POST'])
+@rate_limit
+def test_storage_connection():
+    """Test connection to a storage backend (S3 or Azure)."""
+    data = request.get_json() or {}
+    storage_type = data.get('type', 'local')
+    
+    try:
+        if storage_type == 's3':
+            if not HAS_BOTO3:
+                return jsonify({
+                    "success": False,
+                    "message": "boto3 is not installed. Install with: pip install boto3"
+                })
+            
+            from storage_adapters import S3StorageAdapter
+            adapter = S3StorageAdapter(
+                bucket=data.get('bucket', ''),
+                prefix=data.get('prefix', ''),
+                region=data.get('region', 'us-east-1'),
+                access_key_id=data.get('access_key_id'),
+                secret_access_key=data.get('secret_access_key')
+            )
+            result = adapter.test_connection()
+            return jsonify(result)
+        
+        elif storage_type == 'azure':
+            if not HAS_AZURE:
+                return jsonify({
+                    "success": False,
+                    "message": "azure-storage-blob is not installed. Install with: pip install azure-storage-blob"
+                })
+            
+            from storage_adapters import AzureStorageAdapter
+            adapter = AzureStorageAdapter(
+                account_name=data.get('account_name', ''),
+                container=data.get('container', ''),
+                path=data.get('path', ''),
+                account_key=data.get('account_key')
+            )
+            result = adapter.test_connection()
+            return jsonify(result)
+        
+        else:
+            # Local storage test
+            path = data.get('path', DEFAULT_LOG_DIR)
+            adapter = LocalStorageAdapter(path)
+            result = adapter.test_connection()
+            return jsonify(result)
+    
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
+
+@app.route('/api/storage/configure', methods=['POST'])
+@rate_limit
+def configure_storage_endpoint():
+    """Configure and activate a storage backend."""
+    data = request.get_json() or {}
+    
+    try:
+        result = configure_storage(data)
+        if result['success']:
+            # Invalidate cache since storage source changed
+            cache.invalidate()
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route('/api/storage/current', methods=['GET'])
+@rate_limit
+def get_current_storage():
+    """Get the current storage configuration."""
+    config = get_current_storage_config()
+    return jsonify({
+        "configured": config is not None,
+        "config": config,
+        "available_adapters": {
+            "local": True,
+            "s3": HAS_BOTO3,
+            "azure": HAS_AZURE
+        }
+    })
+
+
+@app.route('/api/storage/reset', methods=['POST'])
+@rate_limit
+def reset_storage_endpoint():
+    """Reset storage to default local configuration."""
+    reset_storage()
+    cache.invalidate()
+    return jsonify({"success": True, "message": "Storage reset to local"})
+
+
+# ============================================================================
+# Environment Configuration Endpoints
+# ============================================================================
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+
+@app.route('/api/config/env-info', methods=['GET'])
+def get_env_info():
+    """Get information about the .env file and detected credentials."""
+    env_path = PROJECT_ROOT / '.env'
+    env_example_path = PROJECT_ROOT / '.env.example'
+    
+    # Check for existing credentials in environment
+    has_aws_creds = bool(os.environ.get('AWS_ACCESS_KEY_ID') and os.environ.get('AWS_SECRET_ACCESS_KEY'))
+    has_azure_creds = bool(
+        os.environ.get('AZURE_STORAGE_CONNECTION_STRING') or
+        (os.environ.get('AZURE_STORAGE_ACCOUNT_NAME') and os.environ.get('AZURE_STORAGE_ACCOUNT_KEY'))
+    )
+    
+    return jsonify({
+        "env_path": str(env_path),
+        "env_exists": env_path.exists(),
+        "env_example_exists": env_example_path.exists(),
+        "project_root": str(PROJECT_ROOT),
+        "has_env_credentials": {
+            "aws": has_aws_creds,
+            "azure": has_azure_creds
+        },
+        "available_sdks": {
+            "boto3": HAS_BOTO3,
+            "azure": HAS_AZURE
+        }
+    })
+
+
+@app.route('/api/config/reveal-env', methods=['POST'])
+def reveal_env_file():
+    """Open the .env file location in Finder/Explorer."""
+    env_path = PROJECT_ROOT / '.env'
+    
+    # Create .env from example if it doesn't exist
+    if not env_path.exists():
+        env_example = PROJECT_ROOT / '.env.example'
+        if env_example.exists():
+            try:
+                import shutil
+                shutil.copy(env_example, env_path)
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Could not create .env: {e}"})
+        else:
+            # Create empty .env
+            try:
+                env_path.touch()
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Could not create .env: {e}"})
+    
+    try:
+        system = platform.system()
+        if system == 'Darwin':  # macOS
+            subprocess.run(['open', '-R', str(env_path)], check=True)
+        elif system == 'Windows':
+            subprocess.run(['explorer', '/select,', str(env_path)], check=True)
+        else:  # Linux
+            subprocess.run(['xdg-open', str(env_path.parent)], check=True)
+        
+        return jsonify({"success": True, "path": str(env_path)})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Could not open location: {e}"})
+
+
+@app.route('/api/config/open-env', methods=['POST'])
+def open_env_file():
+    """Open the .env file in the default text editor."""
+    env_path = PROJECT_ROOT / '.env'
+    
+    # Create .env from example if it doesn't exist
+    if not env_path.exists():
+        env_example = PROJECT_ROOT / '.env.example'
+        if env_example.exists():
+            try:
+                import shutil
+                shutil.copy(env_example, env_path)
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Could not create .env: {e}"})
+        else:
+            # Create .env with cloud storage template
+            try:
+                template = """# Windsurf Logger Configuration
+# See .env.example for all available options
+
+# ============================================================================
+# AWS S3 Configuration (uncomment and fill in to use S3 storage)
+# ============================================================================
+# AWS_ACCESS_KEY_ID=your_access_key_here
+# AWS_SECRET_ACCESS_KEY=your_secret_key_here
+# AWS_DEFAULT_REGION=us-east-1
+
+# ============================================================================
+# Azure Blob Storage Configuration (uncomment and fill in to use Azure storage)
+# ============================================================================
+# AZURE_STORAGE_ACCOUNT_NAME=your_account_name
+# AZURE_STORAGE_ACCOUNT_KEY=your_account_key_here
+
+# ============================================================================
+# Local Configuration
+# ============================================================================
+# WINDSURF_LOG_DIR=/path/to/logs
+"""
+                env_path.write_text(template)
+            except Exception as e:
+                return jsonify({"success": False, "message": f"Could not create .env: {e}"})
+    
+    try:
+        system = platform.system()
+        if system == 'Darwin':  # macOS
+            subprocess.run(['open', str(env_path)], check=True)
+        elif system == 'Windows':
+            subprocess.run(['notepad', str(env_path)], check=True)
+        else:  # Linux
+            # Try common editors
+            for editor in ['xdg-open', 'gedit', 'nano', 'vim']:
+                try:
+                    subprocess.run([editor, str(env_path)], check=True)
+                    break
+                except:
+                    continue
+        
+        return jsonify({"success": True, "path": str(env_path)})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Could not open file: {e}"})
 
 
 # ============================================================================
