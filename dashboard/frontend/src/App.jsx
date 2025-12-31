@@ -1818,7 +1818,7 @@ function ExpandedEventContent({ event, entry, copyToClipboard }) {
 }
 
 function DiffViewer({ edits, copyToClipboard }) {
-  const [viewMode, setViewMode] = useState('unified'); // 'unified' or 'split'
+  const [viewMode, setViewMode] = useState('split'); // 'unified' or 'split'
 
   if (!edits || edits.length === 0) return null;
 
