@@ -2,3 +2,8 @@ flask>=3.0.0
 flask-cors>=4.0.0
 gunicorn>=21.0.0
 python-dotenv>=1.0.0
+
+# Cloud Storage SDKs
+boto3>=1.28.0
+azure-storage-blob>=12.19.0
+azure-identity>=1.15.0
