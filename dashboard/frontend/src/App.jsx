@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo, forwardRef } from 'react';
 import { 
   Search, 
   Filter, 
@@ -31,10 +31,38 @@ import {
   Workflow,
   Hash,
   Calendar,
-  Activity
+  Activity,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 const API_BASE = '/api';
+
+// Hook for scroll-linked fade-in animations
+function useInView(threshold = 0.1) {
+  const ref = useRef(null);
+  const [isInView, setIsInView] = useState(false);
+  
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsInView(true);
+          observer.unobserve(element);
+        }
+      },
+      { threshold, rootMargin: '50px' }
+    );
+    
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [threshold]);
+  
+  return [ref, isInView];
+}
 
 const CATEGORY_CONFIG = {
   prompt: { icon: MessageSquare, color: 'teal', label: 'Prompt', bgClass: 'bg-ws-teal/10', textClass: 'text-ws-teal' },
@@ -60,6 +88,7 @@ function App() {
   const [dateTo, setDateTo] = useState('');
   const [useRegex, setUseRegex] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [expandedEntries, setExpandedEntries] = useState(new Set());
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
@@ -72,6 +101,25 @@ function App() {
   const [workflowExpandedGroups, setWorkflowExpandedGroups] = useState(new Set());
   const [allUsers, setAllUsers] = useState([]);
   const [allSessions, setAllSessions] = useState([]);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const saved = localStorage.getItem('windsurf-theme');
+    if (saved) return saved === 'dark';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+
+  console.log('Initial theme:', isDarkMode ? 'dark' : 'light');
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('windsurf-theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('windsurf-theme', 'light');
+    }
+  }, [isDarkMode]);
+
+  const toggleTheme = () => setIsDarkMode(prev => !prev);
 
   // Auto-select a session with prompts when switching to workflow view
   useEffect(() => {
@@ -229,6 +277,7 @@ function App() {
   }, [searchQuery, filterCategory, filterUser, filterSession, dateFrom, dateTo, useRegex, currentDir, addToast]);
 
   const refreshAll = async () => {
+    setIsRefreshing(true);
     addToast('Refreshing all data...', 'info');
     await Promise.all([
       fetchFiles(currentDir),
@@ -236,6 +285,7 @@ function App() {
       fetchSessions(),
       fetchLogs()
     ]);
+    setIsRefreshing(false);
     addToast('Data refreshed', 'success');
   };
 
@@ -492,7 +542,7 @@ function App() {
 
   const formatSessionName = (session) => {
     if (session.id === 'no_session') {
-      return 'Ungrouped Prompts';
+      return 'All Prompts';
     }
     
     // Get user from first event that has a user
@@ -506,64 +556,80 @@ function App() {
 
   return (
     <div className="min-h-screen bg-ws-bg flex">
+      {/* Skip Navigation Link - 508 Compliance */}
+      <a 
+        href="#main-content" 
+        className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-ws-teal focus:text-white focus:rounded focus:outline-none"
+      >
+        Skip to main content
+      </a>
+
       {/* Toast Notifications */}
       <ToastContainer toasts={toasts} />
 
       {/* Sidebar */}
-      <aside className={`${sidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 bg-ws-sidebar border-r border-ws-border overflow-hidden flex flex-col`}>
+      <aside 
+        className={`${sidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 bg-ws-sidebar border-r border-ws-border overflow-hidden flex flex-col`}
+        aria-label="Navigation and filters"
+      >
         <div className="p-4 border-b border-ws-border">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-ws-teal to-ws-teal-dim flex items-center justify-center shadow-lg shadow-ws-teal/20">
-                <svg viewBox="0 0 24 24" className="w-5 h-5 text-white" fill="currentColor">
+                <svg viewBox="0 0 24 24" className="w-5 h-5 text-white" fill="currentColor" aria-hidden="true">
                   <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
                 </svg>
+                <span className="sr-only">Windsurf Logger Logo</span>
               </div>
               <div>
                 <span className="font-semibold text-ws-text block">Windsurf Logger</span>
                 <span className="text-[10px] text-ws-text-muted">Analytics Dashboard</span>
               </div>
             </div>
-            <button 
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="p-1.5 hover:bg-ws-card rounded text-ws-text-muted hover:text-ws-text transition-all duration-200 opacity-70 hover:opacity-100"
-              title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-            >
-              <ChevronLeft className={`w-4 h-4 transition-transform duration-300 ${sidebarOpen ? '' : 'rotate-180'}`} />
-            </button>
           </div>
         </div>
 
         {/* Navigation */}
-        <nav className="p-3 border-b border-ws-border">
-          <p className="text-[10px] uppercase tracking-wider text-ws-text-muted px-3 py-2">View Mode</p>
-          <button
-            onClick={() => setViewMode('workflow')}
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 ${
-              viewMode === 'workflow' ? 'bg-gradient-to-r from-ws-teal/20 to-ws-teal/5 text-ws-text border-l-2 border-ws-teal' : 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50'
-            }`}
-          >
-            <Activity className="w-4 h-4" />
-            Workflow View
-          </button>
-          <button
-            onClick={() => setViewMode('timeline')}
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 ${
-              viewMode === 'timeline' ? 'bg-gradient-to-r from-ws-teal/20 to-ws-teal/5 text-ws-text border-l-2 border-ws-teal' : 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50'
-            }`}
-          >
-            <GitBranch className="w-4 h-4" />
-            Timeline View
-          </button>
-          <button
-            onClick={() => setViewMode('list')}
-            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all duration-200 ${
-              viewMode === 'list' ? 'bg-gradient-to-r from-ws-teal/20 to-ws-teal/5 text-ws-text border-l-2 border-ws-teal' : 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-            List View
-          </button>
+        <nav className="p-3 border-b border-ws-border" aria-label="View mode selection">
+          <p id="view-mode-label" className="text-[10px] uppercase tracking-wider text-ws-text-muted px-3 py-2">View Mode</p>
+          <div role="group" aria-labelledby="view-mode-label">
+            <button
+              onClick={() => setViewMode('workflow')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
+                viewMode === 'workflow' 
+                  ? 'bg-ws-teal text-white shadow-md shadow-ws-teal/30' 
+                  : 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50'
+              }`}
+              aria-pressed={viewMode === 'workflow'}
+            >
+              <Activity className={`w-4 h-4 ${viewMode === 'workflow' ? 'text-white' : ''}`} aria-hidden="true" />
+              Workflow View
+            </button>
+            <button
+              onClick={() => setViewMode('timeline')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
+                viewMode === 'timeline' 
+                  ? 'bg-ws-teal text-white shadow-md shadow-ws-teal/30' 
+                  : 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50'
+              }`}
+              aria-pressed={viewMode === 'timeline'}
+            >
+              <GitBranch className={`w-4 h-4 ${viewMode === 'timeline' ? 'text-white' : ''}`} aria-hidden="true" />
+              Timeline View
+            </button>
+            <button
+              onClick={() => setViewMode('list')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
+                viewMode === 'list' 
+                  ? 'bg-ws-teal text-white shadow-md shadow-ws-teal/30' 
+                  : 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50'
+              }`}
+              aria-pressed={viewMode === 'list'}
+            >
+              <Layers className={`w-4 h-4 ${viewMode === 'list' ? 'text-white' : ''}`} aria-hidden="true" />
+              List View
+            </button>
+          </div>
         </nav>
 
         {/* Session Selector for Workflow View */}
@@ -589,6 +655,8 @@ function App() {
                             ? 'text-ws-text-secondary hover:text-ws-text hover:bg-ws-card/50 border border-ws-teal/20'
                             : 'text-ws-text-muted hover:text-ws-text-secondary hover:bg-ws-card/30 border border-transparent'
                       }`}
+                      aria-pressed={selectedSession === session.id}
+                      aria-label={`Select session: ${displayName}`}
                     >
                       <div className="flex flex-col gap-1">
                         <div className="flex items-start justify-between gap-2">
@@ -603,6 +671,7 @@ function App() {
                         </div>
                         <div className="flex items-center gap-2 text-[10px] text-ws-text-muted">
                           <span>{session.event_count} events</span>
+                          <span>{session.categories?.prompt || 0} prompts</span>
                           {(session.categories?.file_write || 0) > 0 && (
                             <span>{session.categories?.file_write} changes</span>
                           )}
@@ -650,7 +719,7 @@ function App() {
                   onChange={() => toggleFileSelection(file.path)}
                   className="w-3 h-3 rounded border-ws-border bg-ws-card text-ws-teal focus:ring-ws-teal focus:ring-offset-0"
                 />
-                <FileText className={`w-4 h-4 ${file.type === 'jsonl' ? 'text-ws-teal' : 'text-ws-text-muted'}`} />
+                <FileText className="w-4 h-4 text-ws-text-muted" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm truncate">{file.name}</p>
                   {file.entries > 0 && (
@@ -670,16 +739,23 @@ function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main id="main-content" className="flex-1 flex flex-col overflow-hidden" role="main">
         {/* Header */}
         <header className="bg-ws-bg border-b border-ws-border px-6 py-4">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-4">
               <button 
                 onClick={() => setSidebarOpen(!sidebarOpen)}
-                className="p-2 hover:bg-ws-card rounded text-ws-text-muted hover:text-ws-text transition-colors"
+                className="p-2 hover:bg-ws-card rounded text-ws-text-muted hover:text-ws-text transition-all duration-200 hover:scale-110"
+                title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+                aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+                aria-expanded={sidebarOpen}
               >
-                <BarChart3 className="w-5 h-5" />
+                {sidebarOpen ? (
+                  <ChevronLeft className="w-5 h-5 transition-transform duration-300" />
+                ) : (
+                  <ChevronRight className="w-5 h-5 transition-transform duration-300" />
+                )}
               </button>
               <div>
                 <h1 className="text-xl font-semibold text-ws-text">Windsurf Hooks Logger</h1>
@@ -689,22 +765,27 @@ function App() {
             <div className="flex items-center gap-3">
               <button
                 onClick={refreshAll}
-                className="flex items-center gap-2 px-3 py-1.5 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded text-sm text-ws-text-secondary hover:text-ws-text transition-colors"
+                className="flex items-center gap-2 px-3 py-1.5 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded text-sm text-ws-text-secondary hover:text-ws-text transition-colors btn-press"
                 title="Refresh all data"
+                disabled={isRefreshing}
               >
-                <RefreshCw className="w-4 h-4" />
-                <span className="hidden sm:inline">Refresh</span>
+                <RefreshCw className={`w-4 h-4 transition-transform ${isRefreshing ? 'refresh-spinning' : ''}`} />
+                <span className="hidden sm:inline">{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
               </button>
               <button
                 onClick={() => setShowFilePicker(true)}
-                className="flex items-center gap-2 px-3 py-1.5 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded text-sm text-ws-text-secondary hover:text-ws-text transition-colors"
+                className="flex items-center gap-2 px-3 py-1.5 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded text-sm text-ws-text-secondary hover:text-ws-text transition-colors btn-press"
               >
                 <FolderOpen className="w-4 h-4" />
                 <span className="hidden sm:inline">Directory</span>
               </button>
               <div className="relative group">
-                <button className="p-2 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded text-ws-text-muted hover:text-ws-text transition-colors">
-                  <Download className="w-4 h-4" />
+                <button 
+                  className="p-2 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded text-ws-text-muted hover:text-ws-text transition-colors"
+                  aria-label="Export options"
+                  aria-haspopup="true"
+                >
+                  <Download className="w-4 h-4" aria-hidden="true" />
                 </button>
                 <div className="absolute right-0 top-full mt-1 bg-ws-card border border-ws-border rounded shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all z-10 min-w-[120px]">
                   <button
@@ -721,6 +802,18 @@ function App() {
                   </button>
                 </div>
               </div>
+              <button
+                onClick={toggleTheme}
+                className="p-2 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded text-ws-text-muted hover:text-ws-text transition-all duration-300"
+                title={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+                aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+              >
+                {isDarkMode ? (
+                  <Sun className="w-4 h-4 transition-transform duration-300 hover:rotate-45" />
+                ) : (
+                  <Moon className="w-4 h-4 transition-transform duration-300 hover:-rotate-12" />
+                )}
+              </button>
             </div>
           </div>
 
@@ -729,33 +822,33 @@ function App() {
             <div className="flex items-center gap-2 mb-3 flex-wrap">
               <span className="text-xs text-ws-text-muted">Active filters:</span>
               {filterCategory !== 'all' && (
-                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1">
+                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1 filter-pill">
                   Category: {filterCategory}
-                  <button onClick={() => { setFilterCategory('all'); }} className="hover:text-white"><X className="w-3 h-3" /></button>
+                  <button onClick={() => { setFilterCategory('all'); }} className="hover:text-white action-icon" aria-label="Remove category filter"><X className="w-3 h-3" aria-hidden="true" /></button>
                 </span>
               )}
               {filterUser !== 'all' && (
-                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1">
+                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1 filter-pill">
                   User: {filterUser}
-                  <button onClick={() => { setFilterUser('all'); }} className="hover:text-white"><X className="w-3 h-3" /></button>
+                  <button onClick={() => { setFilterUser('all'); }} className="hover:text-white action-icon" aria-label="Remove user filter"><X className="w-3 h-3" aria-hidden="true" /></button>
                 </span>
               )}
               {filterSession !== 'all' && (
-                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1">
+                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1 filter-pill">
                   Session
-                  <button onClick={() => { setFilterSession('all'); }} className="hover:text-white"><X className="w-3 h-3" /></button>
+                  <button onClick={() => { setFilterSession('all'); }} className="hover:text-white action-icon" aria-label="Remove session filter"><X className="w-3 h-3" aria-hidden="true" /></button>
                 </span>
               )}
               {searchQuery && (
-                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1">
+                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1 filter-pill">
                   Search: "{searchQuery.substring(0, 20)}{searchQuery.length > 20 ? '...' : ''}"
-                  <button onClick={() => { setSearchQuery(''); }} className="hover:text-white"><X className="w-3 h-3" /></button>
+                  <button onClick={() => { setSearchQuery(''); }} className="hover:text-white action-icon" aria-label="Clear search query"><X className="w-3 h-3" aria-hidden="true" /></button>
                 </span>
               )}
               {(dateFrom || dateTo) && (
-                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1">
+                <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal text-xs rounded-full flex items-center gap-1 filter-pill">
                   Date range
-                  <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="hover:text-white"><X className="w-3 h-3" /></button>
+                  <button onClick={() => { setDateFrom(''); setDateTo(''); }} className="hover:text-white action-icon" aria-label="Remove date range filter"><X className="w-3 h-3" aria-hidden="true" /></button>
                 </span>
               )}
               <button
@@ -778,8 +871,10 @@ function App() {
           {/* Search and Filters Row */}
           <div className="flex items-center gap-3">
             <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ws-text-muted" />
+              <label htmlFor="search-logs" className="sr-only">Search logs</label>
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-ws-text-muted" aria-hidden="true" />
               <input
+                id="search-logs"
                 ref={searchInputRef}
                 type="text"
                 value={searchQuery}
@@ -791,13 +886,17 @@ function App() {
               <button
                 onClick={() => setUseRegex(!useRegex)}
                 className={`absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded ${useRegex ? 'text-ws-teal' : 'text-ws-text-muted hover:text-ws-text'}`}
-                title="Toggle regex"
+                title="Toggle regex search"
+                aria-label={useRegex ? "Disable regex search" : "Enable regex search"}
+                aria-pressed={useRegex}
               >
-                <Regex className="w-3 h-3" />
+                <Regex className="w-3 h-3" aria-hidden="true" />
               </button>
             </div>
 
+            <label htmlFor="filter-category" className="sr-only">Filter by category</label>
             <select
+              id="filter-category"
               value={filterCategory}
               onChange={(e) => setFilterCategory(e.target.value)}
               className="px-3 py-2 bg-ws-card border border-ws-border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal"
@@ -810,7 +909,9 @@ function App() {
               <option value="mcp">MCP Tools</option>
             </select>
 
+            <label htmlFor="filter-user" className="sr-only">Filter by user</label>
             <select
+              id="filter-user"
               value={filterUser}
               onChange={(e) => setFilterUser(e.target.value)}
               className="px-3 py-2 bg-ws-card border border-ws-border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal"
@@ -823,33 +924,38 @@ function App() {
 
             <button
               onClick={() => useRegex ? searchLogs() : fetchLogs()}
-              className="px-4 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm font-medium transition-colors"
+              className="px-4 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm font-medium transition-colors btn-press"
+              aria-label="Execute search"
             >
               Search
             </button>
 
             <button
               onClick={() => setShowAdvancedSearch(!showAdvancedSearch)}
-              className={`p-2 rounded transition-colors ${showAdvancedSearch ? 'bg-ws-teal text-white' : 'bg-ws-card border border-ws-border text-ws-text-muted hover:text-ws-text'}`}
+              className={`p-2 rounded transition-all btn-press ${showAdvancedSearch ? 'bg-ws-teal text-white' : 'bg-ws-card border border-ws-border text-ws-text-muted hover:text-ws-text'}`}
               title="Advanced filters (⌘K)"
+              aria-label="Toggle advanced filters"
+              aria-expanded={showAdvancedSearch}
+              aria-controls="advanced-search-panel"
             >
-              <Filter className="w-4 h-4" />
+              <Filter className="w-4 h-4" aria-hidden="true" />
             </button>
           </div>
 
           {/* Advanced Search Panel */}
           {showAdvancedSearch && (
-            <div className="mt-4 p-4 bg-ws-card rounded border border-ws-border slide-up">
+            <div id="advanced-search-panel" className="mt-4 p-4 bg-ws-card rounded border border-ws-border panel-expand-bounce" role="region" aria-label="Advanced search filters">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-medium text-ws-text">Advanced Filters</h3>
-                <button onClick={() => setShowAdvancedSearch(false)} className="text-ws-text-muted hover:text-ws-text">
-                  <X className="w-4 h-4" />
+                <h3 id="advanced-filters-heading" className="text-sm font-medium text-ws-text">Advanced Filters</h3>
+                <button onClick={() => setShowAdvancedSearch(false)} className="text-ws-text-muted hover:text-ws-text" aria-label="Close advanced filters">
+                  <X className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
               <div className="grid grid-cols-4 gap-4">
                 <div>
-                  <label className="block text-xs text-ws-text-muted mb-1">Session</label>
+                  <label htmlFor="filter-session" className="block text-xs text-ws-text-muted mb-1">Session</label>
                   <select
+                    id="filter-session"
                     value={filterSession}
                     onChange={(e) => setFilterSession(e.target.value)}
                     className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal"
@@ -867,8 +973,9 @@ function App() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs text-ws-text-muted mb-1">From Date</label>
+                  <label htmlFor="filter-date-from" className="block text-xs text-ws-text-muted mb-1">From Date</label>
                   <input
+                    id="filter-date-from"
                     type="datetime-local"
                     value={dateFrom}
                     onChange={(e) => setDateFrom(e.target.value)}
@@ -876,8 +983,9 @@ function App() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-ws-text-muted mb-1">To Date</label>
+                  <label htmlFor="filter-date-to" className="block text-xs text-ws-text-muted mb-1">To Date</label>
                   <input
+                    id="filter-date-to"
                     type="datetime-local"
                     value={dateTo}
                     onChange={(e) => setDateTo(e.target.value)}
@@ -921,7 +1029,7 @@ function App() {
         </header>
 
         {/* Log Entries */}
-        <div ref={logContainerRef} className="flex-1 overflow-auto p-6">
+        <div ref={logContainerRef} className="flex-1 overflow-auto p-6" key={viewMode} aria-busy={loading} aria-live="polite">
           {loading ? (
             <LoadingSkeleton />
           ) : viewMode === 'workflow' ? (
@@ -939,19 +1047,21 @@ function App() {
               onSelectSession={setSelectedSession}
             />
           ) : filteredLogs.length === 0 ? (
-            <EmptyState 
-              hasFilters={filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || searchQuery || dateFrom || dateTo}
-              onClearFilters={() => {
-                setFilterCategory('all');
-                setFilterUser('all');
-                setFilterSession('all');
-                setDateFrom('');
-                setDateTo('');
-                setSearchQuery('');
-                setUseRegex(false);
-                setTimeout(() => fetchLogs(), 0);
-              }}
-            />
+            <div className="page-enter">
+              <EmptyState 
+                hasFilters={filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || searchQuery || dateFrom || dateTo}
+                onClearFilters={() => {
+                  setFilterCategory('all');
+                  setFilterUser('all');
+                  setFilterSession('all');
+                  setDateFrom('');
+                  setDateTo('');
+                  setSearchQuery('');
+                  setUseRegex(false);
+                  setTimeout(() => fetchLogs(), 0);
+                }}
+              />
+            </div>
           ) : viewMode === 'timeline' ? (
             <TimelineView
               sessions={sessions}
@@ -962,7 +1072,7 @@ function App() {
               copyToClipboard={copyToClipboard}
             />
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-3 stagger-children">
               {filteredLogs.map((entry, idx) => (
                 <LogEntry
                   key={entry.event_id || entry.id || idx}
@@ -1026,17 +1136,27 @@ function LoadingSkeleton() {
   return (
     <div className="space-y-3">
       {[1, 2, 3, 4, 5].map(i => (
-        <div key={i} className="bg-ws-card border border-ws-border rounded-lg p-4" style={{ animationDelay: `${i * 100}ms` }}>
+        <div 
+          key={i} 
+          className="bg-ws-card border border-ws-border rounded-lg p-4 card-load-in skeleton-breathe" 
+          style={{ animationDelay: `${i * 80}ms` }}
+        >
           <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-lg skeleton" />
+            <div className={`w-10 h-10 rounded-lg skeleton-enhanced loading-wave loading-wave-delay-${i}`} />
             <div className="flex-1">
-              <div className="h-4 w-28 rounded skeleton mb-2" />
-              <div className="h-3 w-56 rounded skeleton" />
+              <div className="h-4 w-28 rounded skeleton-enhanced mb-2" />
+              <div className="h-3 w-56 rounded skeleton-enhanced" />
             </div>
-            <div className="h-4 w-36 rounded skeleton" />
+            <div className="h-4 w-36 rounded skeleton-enhanced" />
           </div>
         </div>
       ))}
+      {/* Loading dots indicator */}
+      <div className="flex items-center justify-center gap-2 py-4">
+        <div className="w-2 h-2 rounded-full bg-ws-teal loading-dot" />
+        <div className="w-2 h-2 rounded-full bg-ws-teal loading-dot" />
+        <div className="w-2 h-2 rounded-full bg-ws-teal loading-dot" />
+      </div>
     </div>
   );
 }
@@ -1068,17 +1188,17 @@ function EmptyState({ hasFilters, onClearFilters }) {
 
 function ToastContainer({ toasts }) {
   return (
-    <div className="fixed bottom-4 right-4 z-50 space-y-2">
+    <div className="fixed bottom-4 right-4 z-50 space-y-2" role="status" aria-live="polite" aria-atomic="true">
       {toasts.map(toast => (
         <div
           key={toast.id}
-          className={`px-4 py-3 rounded shadow-lg toast-enter flex items-center gap-2 ${
+          className={`px-4 py-3 rounded-lg shadow-lg sheet-slide-up flex items-center gap-2 backdrop-blur-sm ${
             toast.type === 'error' ? 'bg-red-500/90 text-white' :
             toast.type === 'success' ? 'bg-ws-teal/90 text-white' :
-            'bg-ws-card text-ws-text border border-ws-border'
+            'bg-ws-card/95 text-ws-text border border-ws-border'
           }`}
         >
-          {toast.type === 'success' && <Check className="w-4 h-4" />}
+          {toast.type === 'success' && <Check className="w-4 h-4 copy-success" />}
           {toast.type === 'error' && <X className="w-4 h-4" />}
           <span className="text-sm">{toast.message}</span>
         </div>
@@ -1089,13 +1209,17 @@ function ToastContainer({ toasts }) {
 
 function TimelineView({ sessions, expandedEntries, toggleEntry, formatTimestamp, truncateContent, copyToClipboard }) {
   if (!sessions || sessions.length === 0) {
-    return <EmptyState hasFilters={false} />;
+    return <div className="page-enter"><EmptyState hasFilters={false} /></div>;
   }
 
   return (
-    <div className="space-y-4">
-      {sessions.slice(0, 10).map(session => (
-        <div key={session.id} className="bg-ws-card border border-ws-border rounded overflow-hidden slide-in">
+    <div className="space-y-4 page-enter stagger-children">
+      {sessions.slice(0, 10).map((session, idx) => (
+        <div 
+          key={session.id} 
+          className="bg-ws-card border border-ws-border rounded overflow-hidden card-load-in"
+          style={{ animationDelay: `${idx * 60}ms` }}
+        >
           {/* Session Header */}
           <div className="p-4 border-b border-ws-border bg-ws-sidebar">
             <div className="flex items-center justify-between">
@@ -1168,6 +1292,10 @@ function TimelineEvent({ event, isExpanded, onToggle, formatTimestamp, truncateC
       <div 
         className="bg-ws-bg rounded p-3 cursor-pointer hover:bg-ws-card-hover border border-ws-border transition-colors"
         onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
       >
         <div className="flex items-center justify-between mb-1">
           <span className={`px-2 py-0.5 rounded text-xs ${config.bgClass} ${config.textClass}`}>
@@ -1278,9 +1406,9 @@ function WorkflowView({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 page-enter">
       {/* Session Header */}
-      <div className="bg-gradient-to-r from-ws-card to-ws-bg border border-ws-border rounded-xl p-6">
+      <div className="bg-gradient-to-r from-ws-card to-ws-bg border border-ws-border rounded-xl p-6 page-fade-in">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl bg-ws-teal/10 flex items-center justify-center">
@@ -1289,7 +1417,7 @@ function WorkflowView({
             <div>
               <h2 className="text-lg font-semibold text-ws-text">Session Workflow</h2>
               <p className="text-sm text-ws-text-muted font-mono">
-                {selectedSession === 'no_session' ? 'Ungrouped Prompts' : selectedSession.substring(0, 24) + '...'}
+                {selectedSession === 'no_session' ? 'All Prompts' : selectedSession.substring(0, 24) + '...'}
               </p>
             </div>
           </div>
@@ -1315,7 +1443,7 @@ function WorkflowView({
       </div>
 
       {/* Workflow Groups */}
-      <div className="space-y-4">
+      <div className="space-y-4 stagger-children">
         {workflowGroups.map((group, groupIdx) => (
           <WorkflowGroup
             key={group.id}
@@ -1375,6 +1503,11 @@ function WorkflowGroup({
       <div 
         className="p-5 cursor-pointer hover:bg-ws-card-hover transition-colors"
         onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        aria-label={`Workflow step ${groupIndex + 1}: ${promptTitle}`}
       >
         <div className="flex items-start gap-4">
           <div className="flex flex-col items-center">
@@ -1411,17 +1544,13 @@ function WorkflowGroup({
                 {commands.length}
               </span>
             )}
-            {isExpanded ? (
-              <ChevronDown className="w-5 h-5 text-ws-text-muted" />
-            ) : (
-              <ChevronRight className="w-5 h-5 text-ws-text-muted" />
-            )}
+            <ChevronRight className={`w-5 h-5 text-ws-text-muted chevron-rotate ${isExpanded ? 'rotated' : ''}`} />
           </div>
         </div>
       </div>
 
       {/* Expanded Content */}
-      {isExpanded && (
+      <div className={`expand-content ${isExpanded ? 'expanded' : ''}`}>
         <div className="border-t border-ws-border bg-ws-bg/50">
           {/* Full Prompt Text */}
           {group.prompt && (
@@ -1433,9 +1562,10 @@ function WorkflowGroup({
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); copyToClipboard(promptData.user_prompt || group.prompt.content || ''); }}
-                  className="text-xs text-ws-text-muted hover:text-ws-text flex items-center gap-1"
+                  className="text-xs text-ws-text-muted hover:text-ws-text flex items-center gap-1 btn-press"
+                  aria-label="Copy prompt to clipboard"
                 >
-                  <Copy className="w-3 h-3" /> Copy
+                  <Copy className="w-3 h-3 action-icon" aria-hidden="true" /> Copy
                 </button>
               </div>
               <pre className="bg-ws-card rounded-lg p-4 text-sm text-ws-text-secondary whitespace-pre-wrap border border-ws-border max-h-64 overflow-auto">
@@ -1519,7 +1649,7 @@ function WorkflowGroup({
             </div>
           )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -1535,8 +1665,13 @@ function WorkflowFileChange({ event, isExpanded, onToggle, copyToClipboard }) {
       <div 
         className="flex items-center gap-3 p-3 cursor-pointer hover:bg-ws-card-hover transition-colors"
         onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        aria-label={`File change: ${fileName}`}
       >
-        <FileCode className="w-4 h-4 text-ws-teal" />
+        <FileCode className="w-4 h-4 text-ws-teal" aria-hidden="true" />
         <div className="flex-1 min-w-0">
           <p className="text-sm text-ws-text font-medium">{fileName}</p>
           <p className="text-xs text-ws-text-muted truncate">{filePath}</p>
@@ -1548,16 +1683,12 @@ function WorkflowFileChange({ event, isExpanded, onToggle, copyToClipboard }) {
           {data.total_lines_removed !== undefined && (
             <span className="text-xs text-red-400">-{data.total_lines_removed}</span>
           )}
-          {isExpanded ? (
-            <ChevronDown className="w-4 h-4 text-ws-text-muted" />
-          ) : (
-            <ChevronRight className="w-4 h-4 text-ws-text-muted" />
-          )}
+          <ChevronRight className={`w-4 h-4 text-ws-text-muted chevron-rotate ${isExpanded ? 'rotated' : ''}`} />
         </div>
       </div>
 
       {isExpanded && hasEdits && (
-        <div className="border-t border-ws-border p-3 bg-ws-bg">
+        <div className="border-t border-ws-border p-3 bg-ws-bg panel-expand-bounce">
           <DiffViewer edits={data.edits} copyToClipboard={copyToClipboard} />
         </div>
       )}
@@ -1606,13 +1737,18 @@ function LogEntry({ entry, isExpanded, onToggle, formatTimestamp, truncateConten
   };
 
   return (
-    <div className={`bg-ws-card border border-ws-border rounded overflow-hidden fade-in border-l-2 ${borderColors[category] || borderColors.unknown} ${isSelected ? 'ring-1 ring-ws-teal' : ''}`}>
+    <div className={`bg-ws-card border border-ws-border rounded overflow-hidden border-l-2 log-card ${borderColors[category] || borderColors.unknown} ${isSelected ? 'ring-1 ring-ws-teal' : ''}`}>
       {/* Header */}
       <div 
         className="flex items-center gap-3 p-3 cursor-pointer hover:bg-ws-card-hover transition-colors"
         onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        aria-label={`${config.label} entry`}
       >
-        <div className={`w-8 h-8 rounded flex items-center justify-center ${config.bgClass}`}>
+        <div className={`w-8 h-8 rounded flex items-center justify-center ${config.bgClass}`} aria-hidden="true">
           <Icon className={`w-4 h-4 ${config.textClass}`} />
         </div>
 
@@ -1646,18 +1782,16 @@ function LogEntry({ entry, isExpanded, onToggle, formatTimestamp, truncateConten
             <Clock className="w-3 h-3" />
             <span>{formatTimestamp(entry.timestamp)}</span>
           </div>
-          {isExpanded ? (
-            <ChevronDown className="w-4 h-4" />
-          ) : (
-            <ChevronRight className="w-4 h-4" />
-          )}
+          <ChevronRight className={`w-4 h-4 chevron-rotate ${isExpanded ? 'rotated' : ''}`} />
         </div>
       </div>
 
       {/* Expanded Content */}
-      {isExpanded && (
-        <ExpandedEventContent entry={entry} copyToClipboard={copyToClipboard} />
-      )}
+      <div className={`expand-content ${isExpanded ? 'expanded' : ''}`}>
+        <div>
+          <ExpandedEventContent entry={entry} copyToClipboard={copyToClipboard} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -1679,8 +1813,9 @@ function ExpandedEventContent({ event, entry, copyToClipboard }) {
             <button
               onClick={(e) => { e.stopPropagation(); copyToClipboard(data.user_prompt || item.content || ''); }}
               className="text-xs text-ws-text-muted hover:text-ws-text flex items-center gap-1"
+              aria-label="Copy prompt to clipboard"
             >
-              <Copy className="w-3 h-3" /> Copy
+              <Copy className="w-3 h-3" aria-hidden="true" /> Copy
             </button>
           </div>
           <pre className="bg-ws-bg rounded p-3 text-sm text-ws-text-secondary overflow-auto max-h-96 whitespace-pre-wrap border border-ws-border">
@@ -1731,8 +1866,9 @@ function ExpandedEventContent({ event, entry, copyToClipboard }) {
             <button
               onClick={(e) => { e.stopPropagation(); copyToClipboard(data.command_line || ''); }}
               className="text-xs text-ws-text-muted hover:text-ws-text flex items-center gap-1"
+              aria-label="Copy command to clipboard"
             >
-              <Copy className="w-3 h-3" /> Copy
+              <Copy className="w-3 h-3" aria-hidden="true" /> Copy
             </button>
           </div>
           <div className="bg-ws-bg rounded p-3 font-mono text-sm border border-ws-border">
@@ -1791,6 +1927,7 @@ function ExpandedEventContent({ event, entry, copyToClipboard }) {
                   <button
                     onClick={(e) => { e.stopPropagation(); copyToClipboard(block.code); }}
                     className="text-xs text-ws-text-muted hover:text-ws-text"
+                    aria-label="Copy code block to clipboard"
                   >
                     Copy
                   </button>
@@ -1806,12 +1943,12 @@ function ExpandedEventContent({ event, entry, copyToClipboard }) {
 
       {/* Metadata */}
       <div className="p-3 border-t border-ws-border bg-ws-sidebar">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+        <dl className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs m-0">
           <MetadataItem label="Event ID" value={item.event_id || item.id || 'N/A'} />
           <MetadataItem label="Trajectory ID" value={item.trajectory_id || 'N/A'} />
           <MetadataItem label="Hostname" value={item.hostname || item.system?.hostname || 'N/A'} />
           <MetadataItem label="Action" value={item.action || 'N/A'} />
-        </div>
+        </dl>
       </div>
     </div>
   );
@@ -1824,16 +1961,18 @@ function DiffViewer({ edits, copyToClipboard }) {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2" role="group" aria-label="Diff view mode">
         <button
           onClick={() => setViewMode('unified')}
           className={`px-2 py-1 text-xs rounded ${viewMode === 'unified' ? 'bg-ws-teal text-white' : 'bg-ws-card border border-ws-border text-ws-text-muted'}`}
+          aria-pressed={viewMode === 'unified'}
         >
           Unified
         </button>
         <button
           onClick={() => setViewMode('split')}
           className={`px-2 py-1 text-xs rounded ${viewMode === 'split' ? 'bg-ws-teal text-white' : 'bg-ws-card border border-ws-border text-ws-text-muted'}`}
+          aria-pressed={viewMode === 'split'}
         >
           Split
         </button>
@@ -1849,8 +1988,9 @@ function DiffViewer({ edits, copyToClipboard }) {
               <button
                 onClick={(e) => { e.stopPropagation(); copyToClipboard(edit.new_string); }}
                 className="text-ws-text-muted hover:text-ws-text flex items-center gap-1"
+                aria-label="Copy new code to clipboard"
               >
-                <Copy className="w-3 h-3" /> Copy
+                <Copy className="w-3 h-3" aria-hidden="true" /> Copy
               </button>
             </div>
           </div>
@@ -1889,8 +2029,8 @@ function DiffViewer({ edits, copyToClipboard }) {
 function MetadataItem({ label, value }) {
   return (
     <div>
-      <p className="text-ws-text-muted mb-0.5">{label}</p>
-      <p className="text-ws-text-secondary truncate" title={value}>{value}</p>
+      <dt className="text-ws-text-muted mb-0.5">{label}</dt>
+      <dd className="text-ws-text-secondary truncate m-0" title={value}>{value}</dd>
     </div>
   );
 }
@@ -1935,21 +2075,29 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="bg-ws-card border border-ws-border rounded w-full max-w-lg max-h-[80vh] flex flex-col">
+    <div 
+      className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="directory-picker-title"
+    >
+      <div className="bg-ws-card border border-ws-border rounded w-full max-w-lg max-h-[80vh] flex flex-col modal-bounce">
         <div className="flex items-center justify-between p-4 border-b border-ws-border">
-          <h2 className="text-base font-semibold text-ws-text">Select Log Directory</h2>
+          <h2 id="directory-picker-title" className="text-base font-semibold text-ws-text">Select Log Directory</h2>
           <button
             onClick={onClose}
             className="p-1 hover:bg-ws-card-hover rounded text-ws-text-muted hover:text-ws-text transition-colors"
+            aria-label="Close dialog"
           >
-            <X className="w-5 h-5" />
+            <X className="w-5 h-5" aria-hidden="true" />
           </button>
         </div>
 
         <div className="p-4 border-b border-ws-border">
           <div className="flex items-center gap-2">
+            <label htmlFor="directory-path" className="sr-only">Directory path</label>
             <input
+              id="directory-path"
               type="text"
               value={path}
               onChange={(e) => setPath(e.target.value)}
@@ -1969,14 +2117,15 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
           <button
             onClick={goUp}
             className="w-full flex items-center gap-2 p-2 rounded hover:bg-ws-card-hover text-ws-text-secondary text-sm transition-colors"
+            aria-label="Navigate to parent directory"
           >
-            <FolderOpen className="w-4 h-4 text-ws-text-muted" />
+            <FolderOpen className="w-4 h-4 text-ws-text-muted" aria-hidden="true" />
             <span>..</span>
           </button>
 
           {loading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-5 w-5 border-2 border-ws-teal border-t-transparent"></div>
+              <div className="rounded-full h-5 w-5 border-2 border-ws-teal border-t-transparent spinner-smooth"></div>
             </div>
           ) : error ? (
             <div className="flex flex-col items-center justify-center py-8 text-center">
@@ -2000,8 +2149,9 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
                 className={`w-full flex items-center gap-2 p-2 rounded hover:bg-ws-card-hover text-ws-text-secondary text-sm transition-colors ${
                   dir.has_logs ? 'border border-ws-teal/30' : ''
                 }`}
+                aria-label={`Open directory ${dir.name}${dir.has_logs ? ', contains log files' : ''}`}
               >
-                <FolderOpen className={`w-4 h-4 ${dir.has_logs ? 'text-ws-teal' : 'text-ws-text-muted'}`} />
+                <FolderOpen className={`w-4 h-4 ${dir.has_logs ? 'text-ws-teal' : 'text-ws-text-muted'}`} aria-hidden="true" />
                 <span className="flex-1 text-left" style={{wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: '1.2'}}>{dir.name}</span>
                 {dir.has_logs && (
                   <span className="text-xs text-ws-teal">Has logs</span>
