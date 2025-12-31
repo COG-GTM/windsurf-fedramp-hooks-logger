@@ -2497,16 +2497,23 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
     fetch(`${API_BASE}/config/env-info`)
       .then(res => res.json())
       .then(data => setEnvInfo(data))
-      .catch(() => {});
+      .catch((err) => {
+        console.error('Failed to fetch env info:', err);
+        setEnvInfo({ env_path: 'Error loading path - check backend', error: true });
+      });
   }, []);
 
   // Re-fetch env info when env guide modal opens
   useEffect(() => {
     if (showEnvGuide) {
+      setEnvInfo(prev => prev?.error ? prev : null); // Reset to loading state unless error
       fetch(`${API_BASE}/config/env-info`)
         .then(res => res.json())
         .then(data => setEnvInfo(data))
-        .catch(() => {});
+        .catch((err) => {
+          console.error('Failed to fetch env info:', err);
+          setEnvInfo({ env_path: 'Error loading path - check backend', error: true });
+        });
     }
   }, [showEnvGuide]);
 
@@ -3120,21 +3127,34 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
                 <p className="text-xs text-ws-text-secondary mb-3">
                   The .env file should be in your windsurf-logger root directory:
                 </p>
-                <div className="bg-ws-bg rounded p-2 font-mono text-xs text-ws-text flex items-center justify-between gap-2">
-                  <span className="break-all flex-1">{envInfo?.env_path || 'Loading path...'}</span>
+                <div className={`bg-ws-bg rounded p-2 font-mono text-xs flex items-center justify-between gap-2 ${
+                  envInfo?.error ? 'text-red-400 border border-red-500/30' : 'text-ws-text'
+                }`}>
+                  <span className="break-all flex-1">
+                    {envInfo === null ? (
+                      <span className="text-ws-text-muted">Loading path...</span>
+                    ) : envInfo?.error ? (
+                      <span>⚠️ {envInfo.env_path}</span>
+                    ) : (
+                      envInfo.env_path
+                    )}
+                  </span>
                   <button
                     onClick={() => {
                       const pathToCopy = envInfo?.env_path;
-                      if (pathToCopy) {
+                      if (pathToCopy && !envInfo?.error) {
                         navigator.clipboard.writeText(pathToCopy);
                         setCopiedItem('env-path');
                         setTimeout(() => setCopiedItem(null), 2000);
                       }
                     }}
+                    disabled={!envInfo || envInfo?.error}
                     className={`px-2 py-1 rounded text-xs whitespace-nowrap transition-all ${
                       copiedItem === 'env-path' 
                         ? 'bg-green-500/20 text-green-400' 
-                        : 'text-ws-teal hover:bg-ws-teal/10'
+                        : envInfo?.error
+                          ? 'text-ws-text-muted cursor-not-allowed opacity-50'
+                          : 'text-ws-teal hover:bg-ws-teal/10'
                     }`}
                   >
                     {copiedItem === 'env-path' ? '✓ Copied!' : '📋 Copy Path'}
