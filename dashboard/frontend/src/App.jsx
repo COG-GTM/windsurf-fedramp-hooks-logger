@@ -1056,6 +1056,7 @@ function App() {
               sessions={sessions}
               logs={filteredLogs}
               formatTimestamp={formatTimestamp}
+              hasActiveFilters={filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || searchQuery || dateFrom || dateTo}
             />
           ) : viewMode === 'workflow' ? (
             <WorkflowView
@@ -2060,11 +2061,16 @@ function MetadataItem({ label, value }) {
   );
 }
 
-function MetricsDashboard({ stats, sessions, logs, formatTimestamp }) {
-  // Compute metrics from data
+function MetricsDashboard({ stats, sessions, logs, formatTimestamp, hasActiveFilters }) {
+  // Compute ALL metrics from filtered logs data for consistency
   const metrics = useMemo(() => {
-    const categoryBreakdown = stats?.categories || {};
-    const totalEvents = stats?.total_events || Object.values(categoryBreakdown).reduce((a, b) => a + b, 0);
+    // Build category breakdown from filtered logs (not from stats which is unfiltered)
+    const categoryBreakdown = {};
+    logs.forEach(log => {
+      const cat = log.category || log.type || 'unknown';
+      categoryBreakdown[cat] = (categoryBreakdown[cat] || 0) + 1;
+    });
+    const totalEvents = logs.length;
     
     // Activity by hour of day
     const hourlyActivity = Array(24).fill(0);
@@ -2087,20 +2093,21 @@ function MetricsDashboard({ stats, sessions, logs, formatTimestamp }) {
     });
     const maxDaily = Math.max(...dailyActivity, 1);
     
-    // Top modified files
+    // Top modified files - track all unique files
     const fileChanges = {};
-    logs.filter(l => l.category === 'file_write').forEach(log => {
+    logs.filter(l => l.category === 'file_write' || l.type === 'file_write').forEach(log => {
       const filePath = log.data?.file_path || log.file_path || 'unknown';
       const fileName = filePath.split('/').pop();
       fileChanges[fileName] = (fileChanges[fileName] || 0) + 1;
     });
+    const uniqueFilesCount = Object.keys(fileChanges).length;
     const topFiles = Object.entries(fileChanges)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 8);
     
     // Top commands
     const commandUsage = {};
-    logs.filter(l => l.category === 'command').forEach(log => {
+    logs.filter(l => l.category === 'command' || l.type === 'command').forEach(log => {
       const cmd = log.data?.command_line || log.command_line || 'unknown';
       const cmdName = cmd.split(' ')[0];
       commandUsage[cmdName] = (commandUsage[cmdName] || 0) + 1;
@@ -2111,7 +2118,7 @@ function MetricsDashboard({ stats, sessions, logs, formatTimestamp }) {
     
     // MCP tool usage
     const mcpUsage = {};
-    logs.filter(l => l.category === 'mcp').forEach(log => {
+    logs.filter(l => l.category === 'mcp' || l.type === 'mcp').forEach(log => {
       const tool = log.data?.mcp_tool_name || log.data?.mcp_full_tool || 'unknown';
       mcpUsage[tool] = (mcpUsage[tool] || 0) + 1;
     });
@@ -2119,22 +2126,30 @@ function MetricsDashboard({ stats, sessions, logs, formatTimestamp }) {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 6);
     
-    // Session metrics
-    const avgEventsPerSession = sessions.length > 0 
-      ? Math.round(totalEvents / sessions.length) 
+    // Unique sessions from filtered logs
+    const uniqueSessionIds = new Set();
+    logs.forEach(log => {
+      if (log.trajectory_id) {
+        uniqueSessionIds.add(log.trajectory_id);
+      }
+    });
+    const filteredSessionCount = uniqueSessionIds.size || 1; // Avoid division by zero
+    
+    // Session metrics from filtered data
+    const avgEventsPerSession = filteredSessionCount > 0 
+      ? Math.round(totalEvents / filteredSessionCount) 
       : 0;
     
     // Lines of code metrics
     let totalLinesAdded = 0;
     let totalLinesRemoved = 0;
-    logs.filter(l => l.category === 'file_write').forEach(log => {
+    logs.filter(l => l.category === 'file_write' || l.type === 'file_write').forEach(log => {
       totalLinesAdded += log.data?.total_lines_added || 0;
       totalLinesRemoved += log.data?.total_lines_removed || 0;
     });
     
     // Recent activity (last 7 days)
     const now = new Date();
-    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const recentDays = [];
     for (let i = 6; i >= 0; i--) {
       const date = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
@@ -2163,9 +2178,11 @@ function MetricsDashboard({ stats, sessions, logs, formatTimestamp }) {
       totalLinesAdded,
       totalLinesRemoved,
       recentDays,
-      maxRecentDaily
+      maxRecentDaily,
+      uniqueFilesCount,
+      filteredSessionCount
     };
-  }, [stats, sessions, logs]);
+  }, [logs]);
 
   const categoryColors = {
     prompt: { bg: 'bg-ws-teal', text: 'text-ws-teal', label: 'Prompts' },
@@ -2181,40 +2198,67 @@ function MetricsDashboard({ stats, sessions, logs, formatTimestamp }) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-2xl font-bold text-ws-text">Metrics Dashboard</h2>
-          <p className="text-sm text-ws-text-muted mt-1">Analytics and insights from your Cascade activity</p>
+          <p className="text-sm text-ws-text-muted mt-1">
+            Analytics and insights from your Cascade activity
+            {hasActiveFilters && <span className="text-ws-teal ml-2">(filtered view)</span>}
+          </p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-ws-text-muted">
-          <Database className="w-4 h-4" />
-          <span>{metrics.totalEvents.toLocaleString()} total events</span>
+        <div className="flex items-center gap-3 text-xs text-ws-text-muted">
+          {hasActiveFilters && (
+            <span className="px-2 py-1 bg-ws-teal/10 text-ws-teal rounded-full flex items-center gap-1">
+              <Filter className="w-3 h-3" />
+              Filters Active
+            </span>
+          )}
+          <div className="flex items-center gap-2">
+            <Database className="w-4 h-4" />
+            <span>{metrics.totalEvents.toLocaleString()} {hasActiveFilters ? 'filtered' : 'total'} events</span>
+          </div>
         </div>
       </div>
 
-      {/* Key Metrics Cards */}
+      {/* Empty state for no data */}
+      {logs.length === 0 && (
+        <div className="flex flex-col items-center justify-center py-16 text-ws-text-muted">
+          <BarChart3 className="w-16 h-16 mb-4 opacity-50" />
+          <h3 className="text-lg font-semibold text-ws-text mb-2">No Data Available</h3>
+          <p className="text-sm text-center max-w-md">
+            {hasActiveFilters 
+              ? 'No events match your current filters. Try adjusting or clearing them to see metrics.'
+              : 'No log events found. Start using Cascade to generate activity data.'}
+          </p>
+        </div>
+      )}
+
+      {logs.length > 0 && (
+        <>
+
+      {/* Key Metrics Cards - All computed from filtered logs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 stagger-children">
         <MetricCard
           icon={<MessageSquare className="w-5 h-5" />}
           label="Total Prompts"
-          value={stats?.categories?.prompt || 0}
+          value={metrics.categoryBreakdown.prompt || 0}
           color="teal"
           trend={null}
         />
         <MetricCard
           icon={<Edit3 className="w-5 h-5" />}
           label="Code Changes"
-          value={stats?.categories?.file_write || 0}
+          value={metrics.categoryBreakdown.file_write || 0}
           color="emerald"
           subValue={`+${metrics.totalLinesAdded} / -${metrics.totalLinesRemoved} lines`}
         />
         <MetricCard
           icon={<Play className="w-5 h-5" />}
           label="Commands Run"
-          value={stats?.categories?.command || 0}
+          value={metrics.categoryBreakdown.command || 0}
           color="amber"
         />
         <MetricCard
           icon={<Users className="w-5 h-5" />}
           label="Sessions"
-          value={stats?.unique_sessions || sessions.length}
+          value={metrics.filteredSessionCount}
           color="purple"
           subValue={`~${metrics.avgEventsPerSession} events/session`}
         />
@@ -2452,11 +2496,13 @@ function MetricsDashboard({ stats, sessions, logs, formatTimestamp }) {
             <p className="text-xs text-ws-text-muted mt-1">Net Change</p>
           </div>
           <div className="text-center">
-            <p className="text-3xl font-bold text-ws-orange">{metrics.topFiles.length}</p>
+            <p className="text-3xl font-bold text-ws-orange">{metrics.uniqueFilesCount}</p>
             <p className="text-xs text-ws-text-muted mt-1">Unique Files</p>
           </div>
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }
