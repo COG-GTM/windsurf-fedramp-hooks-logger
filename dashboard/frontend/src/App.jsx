@@ -2480,6 +2480,11 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
   const [directories, setDirectories] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  
+  // Storage source selection state
+  const [storageSource, setStorageSource] = useState('local'); // 'local', 's3', 'azure'
+  const [s3Config, setS3Config] = useState({ bucket: '', prefix: '', region: 'us-east-1' });
+  const [azureConfig, setAzureConfig] = useState({ container: '', path: '', accountName: '' });
 
   const fetchDirectories = async (dir) => {
     setLoading(true);
@@ -2523,7 +2528,7 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
     >
       <div className="bg-ws-card border border-ws-border rounded w-full max-w-lg max-h-[80vh] flex flex-col modal-bounce">
         <div className="flex items-center justify-between p-4 border-b border-ws-border">
-          <h2 id="directory-picker-title" className="text-base font-semibold text-ws-text">Select Log Directory</h2>
+          <h2 id="directory-picker-title" className="text-base font-semibold text-ws-text">Select Log Source</h2>
           <button
             onClick={onClose}
             className="p-1 hover:bg-ws-card-hover rounded text-ws-text-muted hover:text-ws-text transition-colors"
@@ -2533,73 +2538,250 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
           </button>
         </div>
 
-        <div className="p-4 border-b border-ws-border">
-          <div className="flex items-center gap-2">
-            <label htmlFor="directory-path" className="sr-only">Directory path</label>
-            <input
-              id="directory-path"
-              type="text"
-              value={path}
-              onChange={(e) => setPath(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && fetchDirectories(path)}
-              className="flex-1 px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text text-sm focus:outline-none focus:border-ws-teal"
-            />
-            <button
-              onClick={() => fetchDirectories(path)}
-              className="px-3 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm transition-colors"
-            >
-              Go
-            </button>
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-auto p-2">
+        {/* Storage Source Tabs */}
+        <div className="flex border-b border-ws-border">
           <button
-            onClick={goUp}
-            className="w-full flex items-center gap-2 p-2 rounded hover:bg-ws-card-hover text-ws-text-secondary text-sm transition-colors"
-            aria-label="Navigate to parent directory"
+            onClick={() => setStorageSource('local')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+              storageSource === 'local'
+                ? 'text-ws-teal border-b-2 border-ws-teal bg-ws-teal/5'
+                : 'text-ws-text-muted hover:text-ws-text hover:bg-ws-card-hover'
+            }`}
+            aria-pressed={storageSource === 'local'}
           >
-            <FolderOpen className="w-4 h-4 text-ws-text-muted" aria-hidden="true" />
-            <span>..</span>
+            <FolderOpen className="w-4 h-4" aria-hidden="true" />
+            Local
           </button>
-
-          {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="rounded-full h-5 w-5 border-2 border-ws-teal border-t-transparent spinner-smooth"></div>
-            </div>
-          ) : error ? (
-            <div className="flex flex-col items-center justify-center py-8 text-center">
-              <p className="text-red-400 text-sm mb-2">{error}</p>
-              <button
-                onClick={() => fetchDirectories(path)}
-                className="text-xs text-ws-teal hover:underline"
-              >
-                Try again
-              </button>
-            </div>
-          ) : directories.length === 0 ? (
-            <div className="flex items-center justify-center py-8">
-              <p className="text-ws-text-muted text-sm">No subdirectories found</p>
-            </div>
-          ) : (
-            directories.map(dir => (
-              <button
-                key={dir.path}
-                onClick={() => fetchDirectories(dir.path)}
-                className={`w-full flex items-center gap-2 p-2 rounded hover:bg-ws-card-hover text-ws-text-secondary text-sm transition-colors ${
-                  dir.has_logs ? 'border border-ws-teal/30' : ''
-                }`}
-                aria-label={`Open directory ${dir.name}${dir.has_logs ? ', contains log files' : ''}`}
-              >
-                <FolderOpen className={`w-4 h-4 ${dir.has_logs ? 'text-ws-teal' : 'text-ws-text-muted'}`} aria-hidden="true" />
-                <span className="flex-1 text-left" style={{wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: '1.2'}}>{dir.name}</span>
-                {dir.has_logs && (
-                  <span className="text-xs text-ws-teal">Has logs</span>
-                )}
-              </button>
-            ))
-          )}
+          <button
+            onClick={() => setStorageSource('s3')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+              storageSource === 's3'
+                ? 'text-ws-teal border-b-2 border-ws-teal bg-ws-teal/5'
+                : 'text-ws-text-muted hover:text-ws-text hover:bg-ws-card-hover'
+            }`}
+            aria-pressed={storageSource === 's3'}
+          >
+            <Database className="w-4 h-4" aria-hidden="true" />
+            AWS S3
+          </button>
+          <button
+            onClick={() => setStorageSource('azure')}
+            className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+              storageSource === 'azure'
+                ? 'text-ws-teal border-b-2 border-ws-teal bg-ws-teal/5'
+                : 'text-ws-text-muted hover:text-ws-text hover:bg-ws-card-hover'
+            }`}
+            aria-pressed={storageSource === 'azure'}
+          >
+            <Layers className="w-4 h-4" aria-hidden="true" />
+            Azure Blob
+          </button>
         </div>
+
+        {/* Local Directory Browser */}
+        {storageSource === 'local' && (
+          <>
+            <div className="p-4 border-b border-ws-border">
+              <div className="flex items-center gap-2">
+                <label htmlFor="directory-path" className="sr-only">Directory path</label>
+                <input
+                  id="directory-path"
+                  type="text"
+                  value={path}
+                  onChange={(e) => setPath(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && fetchDirectories(path)}
+                  className="flex-1 px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text text-sm focus:outline-none focus:border-ws-teal"
+                />
+                <button
+                  onClick={() => fetchDirectories(path)}
+                  className="px-3 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm transition-colors"
+                >
+                  Go
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* S3 Configuration */}
+        {storageSource === 's3' && (
+          <div className="p-4 border-b border-ws-border space-y-3">
+            <div className="text-xs text-ws-text-muted mb-2">
+              Configure AWS S3 bucket to pull hooks logs from a remote location.
+            </div>
+            <div>
+              <label htmlFor="s3-bucket" className="block text-xs font-medium text-ws-text-secondary mb-1">
+                Bucket Name *
+              </label>
+              <input
+                id="s3-bucket"
+                type="text"
+                value={s3Config.bucket}
+                onChange={(e) => setS3Config({ ...s3Config, bucket: e.target.value })}
+                placeholder="my-logs-bucket"
+                className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text text-sm focus:outline-none focus:border-ws-teal"
+              />
+            </div>
+            <div>
+              <label htmlFor="s3-prefix" className="block text-xs font-medium text-ws-text-secondary mb-1">
+                Prefix / Path
+              </label>
+              <input
+                id="s3-prefix"
+                type="text"
+                value={s3Config.prefix}
+                onChange={(e) => setS3Config({ ...s3Config, prefix: e.target.value })}
+                placeholder="logs/windsurf/"
+                className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text text-sm focus:outline-none focus:border-ws-teal"
+              />
+            </div>
+            <div>
+              <label htmlFor="s3-region" className="block text-xs font-medium text-ws-text-secondary mb-1">
+                Region
+              </label>
+              <select
+                id="s3-region"
+                value={s3Config.region}
+                onChange={(e) => setS3Config({ ...s3Config, region: e.target.value })}
+                className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text text-sm focus:outline-none focus:border-ws-teal"
+              >
+                <option value="us-east-1">US East (N. Virginia)</option>
+                <option value="us-east-2">US East (Ohio)</option>
+                <option value="us-west-1">US West (N. California)</option>
+                <option value="us-west-2">US West (Oregon)</option>
+                <option value="us-gov-west-1">AWS GovCloud (US-West)</option>
+                <option value="us-gov-east-1">AWS GovCloud (US-East)</option>
+                <option value="eu-west-1">EU (Ireland)</option>
+                <option value="eu-west-2">EU (London)</option>
+                <option value="eu-central-1">EU (Frankfurt)</option>
+              </select>
+            </div>
+            <div className="text-xs text-ws-text-muted bg-ws-bg/50 p-2 rounded border border-ws-border/50">
+              <strong>Note:</strong> AWS credentials should be configured via environment variables or IAM role.
+            </div>
+          </div>
+        )}
+
+        {/* Azure Configuration */}
+        {storageSource === 'azure' && (
+          <div className="p-4 border-b border-ws-border space-y-3">
+            <div className="text-xs text-ws-text-muted mb-2">
+              Configure Azure Blob Storage to pull hooks logs from a remote location.
+            </div>
+            <div>
+              <label htmlFor="azure-account" className="block text-xs font-medium text-ws-text-secondary mb-1">
+                Storage Account Name *
+              </label>
+              <input
+                id="azure-account"
+                type="text"
+                value={azureConfig.accountName}
+                onChange={(e) => setAzureConfig({ ...azureConfig, accountName: e.target.value })}
+                placeholder="mystorageaccount"
+                className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text text-sm focus:outline-none focus:border-ws-teal"
+              />
+            </div>
+            <div>
+              <label htmlFor="azure-container" className="block text-xs font-medium text-ws-text-secondary mb-1">
+                Container Name *
+              </label>
+              <input
+                id="azure-container"
+                type="text"
+                value={azureConfig.container}
+                onChange={(e) => setAzureConfig({ ...azureConfig, container: e.target.value })}
+                placeholder="logs-container"
+                className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text text-sm focus:outline-none focus:border-ws-teal"
+              />
+            </div>
+            <div>
+              <label htmlFor="azure-path" className="block text-xs font-medium text-ws-text-secondary mb-1">
+                Blob Path / Prefix
+              </label>
+              <input
+                id="azure-path"
+                type="text"
+                value={azureConfig.path}
+                onChange={(e) => setAzureConfig({ ...azureConfig, path: e.target.value })}
+                placeholder="windsurf/hooks/"
+                className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text text-sm focus:outline-none focus:border-ws-teal"
+              />
+            </div>
+            <div className="text-xs text-ws-text-muted bg-ws-bg/50 p-2 rounded border border-ws-border/50">
+              <strong>Note:</strong> Azure credentials should be configured via environment variables or managed identity.
+            </div>
+          </div>
+        )}
+
+        {/* Local Directory Browser */}
+        {storageSource === 'local' && (
+          <div className="flex-1 overflow-auto p-2">
+            <button
+              onClick={goUp}
+              className="w-full flex items-center gap-2 p-2 rounded hover:bg-ws-card-hover text-ws-text-secondary text-sm transition-colors"
+              aria-label="Navigate to parent directory"
+            >
+              <FolderOpen className="w-4 h-4 text-ws-text-muted" aria-hidden="true" />
+              <span>..</span>
+            </button>
+
+            {loading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="rounded-full h-5 w-5 border-2 border-ws-teal border-t-transparent spinner-smooth"></div>
+              </div>
+            ) : error ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <p className="text-red-400 text-sm mb-2">{error}</p>
+                <button
+                  onClick={() => fetchDirectories(path)}
+                  className="text-xs text-ws-teal hover:underline"
+                >
+                  Try again
+                </button>
+              </div>
+            ) : directories.length === 0 ? (
+              <div className="flex items-center justify-center py-8">
+                <p className="text-ws-text-muted text-sm">No subdirectories found</p>
+              </div>
+            ) : (
+              directories.map(dir => (
+                <button
+                  key={dir.path}
+                  onClick={() => fetchDirectories(dir.path)}
+                  className={`w-full flex items-center gap-2 p-2 rounded hover:bg-ws-card-hover text-ws-text-secondary text-sm transition-colors ${
+                    dir.has_logs ? 'border border-ws-teal/30' : ''
+                  }`}
+                  aria-label={`Open directory ${dir.name}${dir.has_logs ? ', contains log files' : ''}`}
+                >
+                  <FolderOpen className={`w-4 h-4 ${dir.has_logs ? 'text-ws-teal' : 'text-ws-text-muted'}`} aria-hidden="true" />
+                  <span className="flex-1 text-left" style={{wordBreak: 'break-word', whiteSpace: 'normal', lineHeight: '1.2'}}>{dir.name}</span>
+                  {dir.has_logs && (
+                    <span className="text-xs text-ws-teal">Has logs</span>
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* Cloud storage placeholder content */}
+        {storageSource !== 'local' && (
+          <div className="flex-1 overflow-auto p-4 flex flex-col items-center justify-center text-center">
+            <div className="w-12 h-12 rounded-full bg-ws-teal/10 flex items-center justify-center mb-3">
+              {storageSource === 's3' ? (
+                <Database className="w-6 h-6 text-ws-teal" />
+              ) : (
+                <Layers className="w-6 h-6 text-ws-teal" />
+              )}
+            </div>
+            <p className="text-ws-text-secondary text-sm mb-1">
+              {storageSource === 's3' ? 'AWS S3' : 'Azure Blob Storage'}
+            </p>
+            <p className="text-ws-text-muted text-xs max-w-xs">
+              Configure the {storageSource === 's3' ? 'bucket' : 'container'} details above to connect to your cloud storage.
+            </p>
+          </div>
+        )}
 
         <div className="p-4 border-t border-ws-border flex justify-end gap-2">
           <button
@@ -2608,12 +2790,33 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
           >
             Cancel
           </button>
-          <button
-            onClick={() => onSelect(path)}
-            className="px-4 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm transition-colors"
-          >
-            Select Directory
-          </button>
+          {storageSource === 'local' ? (
+            <button
+              onClick={() => onSelect(path)}
+              className="px-4 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm transition-colors"
+            >
+              Select Directory
+            </button>
+          ) : (
+            <button
+              onClick={() => {
+                // For now, show a message that cloud storage will be connected
+                // Future: integrate with backend storage adapters
+                const config = storageSource === 's3' ? s3Config : azureConfig;
+                const storageUri = storageSource === 's3' 
+                  ? `s3://${config.bucket}/${config.prefix || ''}` 
+                  : `azure://${config.accountName}/${config.container}/${config.path || ''}`;
+                alert(`Cloud storage selection: ${storageUri}\n\nBackend integration coming soon. For now, logs will continue to be read from the local directory.`);
+              }}
+              disabled={
+                (storageSource === 's3' && !s3Config.bucket) ||
+                (storageSource === 'azure' && (!azureConfig.accountName || !azureConfig.container))
+              }
+              className="px-4 py-2 bg-ws-teal hover:bg-ws-teal-dim text-white rounded text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Connect Storage
+            </button>
+          )}
         </div>
       </div>
     </div>
