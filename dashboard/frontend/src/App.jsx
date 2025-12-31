@@ -2490,6 +2490,7 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
   const [envInfo, setEnvInfo] = useState(null);
   const [testingConnection, setTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState(null); // 'success', 'error', or null
+  const [copiedItem, setCopiedItem] = useState(null); // Track which item was copied for visual feedback
 
   // Fetch env file info on mount and when env guide opens
   useEffect(() => {
@@ -3119,17 +3120,24 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
                 <p className="text-xs text-ws-text-secondary mb-3">
                   The .env file should be in your windsurf-logger root directory:
                 </p>
-                <div className="bg-ws-bg rounded p-2 font-mono text-xs text-ws-text flex items-center justify-between">
-                  <span>{envInfo?.env_path || '~/.../windsurf-logger/.env'}</span>
+                <div className="bg-ws-bg rounded p-2 font-mono text-xs text-ws-text flex items-center justify-between gap-2">
+                  <span className="break-all flex-1">{envInfo?.env_path || 'Loading path...'}</span>
                   <button
                     onClick={() => {
-                      if (envInfo?.env_path) {
-                        navigator.clipboard.writeText(envInfo.env_path);
+                      const pathToCopy = envInfo?.env_path;
+                      if (pathToCopy) {
+                        navigator.clipboard.writeText(pathToCopy);
+                        setCopiedItem('env-path');
+                        setTimeout(() => setCopiedItem(null), 2000);
                       }
                     }}
-                    className="px-2 py-1 text-ws-teal hover:bg-ws-teal/10 rounded text-xs"
+                    className={`px-2 py-1 rounded text-xs whitespace-nowrap transition-all ${
+                      copiedItem === 'env-path' 
+                        ? 'bg-green-500/20 text-green-400' 
+                        : 'text-ws-teal hover:bg-ws-teal/10'
+                    }`}
                   >
-                    Copy
+                    {copiedItem === 'env-path' ? '✓ Copied!' : '📋 Copy Path'}
                   </button>
                 </div>
                 <div className="mt-3 flex gap-2">
@@ -3199,10 +3207,16 @@ AWS_DEFAULT_REGION=${s3Config.region || 'us-east-1'}
 WINDSURF_S3_BUCKET=${s3Config.bucket || 'your-bucket-name'}
 WINDSURF_S3_PREFIX=${s3Config.prefix || 'logs/'}`;
                         navigator.clipboard.writeText(text);
+                        setCopiedItem('s3-config');
+                        setTimeout(() => setCopiedItem(null), 2000);
                       }}
-                      className="px-3 py-1.5 bg-ws-teal text-white rounded text-xs font-medium hover:bg-ws-teal-dim transition-colors"
+                      className={`px-3 py-1.5 rounded text-xs font-medium transition-all ${
+                        copiedItem === 's3-config'
+                          ? 'bg-green-500 text-white'
+                          : 'bg-ws-teal text-white hover:bg-ws-teal-dim'
+                      }`}
                     >
-                      📋 Copy to Clipboard
+                      {copiedItem === 's3-config' ? '✓ Copied!' : '📋 Copy to Clipboard'}
                     </button>
                   </div>
                 ) : (
@@ -3227,10 +3241,16 @@ AZURE_STORAGE_ACCOUNT_KEY=your_account_key_here
 WINDSURF_AZURE_CONTAINER=${azureConfig.container || 'your-container'}
 WINDSURF_AZURE_PATH=${azureConfig.path || 'logs/'}`;
                         navigator.clipboard.writeText(text);
+                        setCopiedItem('azure-config');
+                        setTimeout(() => setCopiedItem(null), 2000);
                       }}
-                      className="px-3 py-1.5 bg-ws-teal text-white rounded text-xs font-medium hover:bg-ws-teal-dim transition-colors"
+                      className={`px-3 py-1.5 rounded text-xs font-medium transition-all ${
+                        copiedItem === 'azure-config'
+                          ? 'bg-green-500 text-white'
+                          : 'bg-ws-teal text-white hover:bg-ws-teal-dim'
+                      }`}
                     >
-                      📋 Copy to Clipboard
+                      {copiedItem === 'azure-config' ? '✓ Copied!' : '📋 Copy to Clipboard'}
                     </button>
                   </div>
                 )}
@@ -3268,11 +3288,16 @@ WINDSURF_AZURE_PATH=${azureConfig.path || 'logs/'}`;
                   <button
                     onClick={() => {
                       navigator.clipboard.writeText('cd windsurf-logger && ./dashboard/start.sh');
-                      alert('Command copied to clipboard!');
+                      setCopiedItem('restart-cmd');
+                      setTimeout(() => setCopiedItem(null), 2000);
                     }}
-                    className="px-3 py-1.5 bg-ws-teal/20 hover:bg-ws-teal/30 text-ws-teal rounded text-xs font-medium transition-colors"
+                    className={`px-3 py-1.5 rounded text-xs font-medium transition-all ${
+                      copiedItem === 'restart-cmd'
+                        ? 'bg-green-500/20 text-green-400'
+                        : 'bg-ws-teal/20 hover:bg-ws-teal/30 text-ws-teal'
+                    }`}
                   >
-                    📋 Copy Command
+                    {copiedItem === 'restart-cmd' ? '✓ Copied!' : '📋 Copy Command'}
                   </button>
                 </div>
               </div>
