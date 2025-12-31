@@ -1516,6 +1516,42 @@ def open_env_file():
         return jsonify({"success": False, "message": f"Could not open file: {type(e).__name__}: {e}"})
 
 
+@app.route('/api/config/restart-backend', methods=['POST'])
+def restart_backend():
+    """Restart the backend server by opening a new terminal with the start script."""
+    start_script = PROJECT_ROOT / 'dashboard' / 'start.sh'
+    
+    if not start_script.exists():
+        return jsonify({"success": False, "message": f"Start script not found at {start_script}"})
+    
+    try:
+        system = platform.system()
+        if system == 'Darwin':  # macOS
+            # Open a new Terminal window and run the start script
+            apple_script = f'''
+            tell application "Terminal"
+                activate
+                do script "cd \\"{PROJECT_ROOT}\\" && ./dashboard/start.sh"
+            end tell
+            '''
+            subprocess.Popen(['osascript', '-e', apple_script])
+        elif system == 'Windows':
+            # Open a new cmd window
+            subprocess.Popen(['cmd', '/c', 'start', 'cmd', '/k', f'cd /d {PROJECT_ROOT} && dashboard\\start.bat'])
+        else:  # Linux
+            # Try to open a new terminal
+            for term in ['gnome-terminal', 'xterm', 'konsole']:
+                try:
+                    subprocess.Popen([term, '--', 'bash', '-c', f'cd "{PROJECT_ROOT}" && ./dashboard/start.sh; exec bash'])
+                    break
+                except FileNotFoundError:
+                    continue
+        
+        return jsonify({"success": True, "message": "Backend restart initiated in new terminal"})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Could not restart: {type(e).__name__}: {e}"})
+
+
 # ============================================================================
 # Error Handlers
 # ============================================================================

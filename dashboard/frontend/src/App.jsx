@@ -3124,24 +3124,32 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
                 </div>
                 <div className="mt-3 flex gap-2">
                   <button
-                    onClick={() => {
-                      fetch(`${API_BASE}/config/reveal-env`, { method: 'POST' })
-                        .then(res => res.json())
-                        .then(data => {
-                          if (!data.success) alert(data.message || 'Could not open file location');
-                        });
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`${API_BASE}/config/reveal-env`, { method: 'POST' });
+                        const data = await res.json();
+                        if (!data.success) {
+                          alert(data.message || 'Could not open file location');
+                        }
+                      } catch (err) {
+                        alert(`Network error: ${err.message}. Make sure the backend is running.`);
+                      }
                     }}
                     className="px-3 py-1.5 bg-ws-teal/20 hover:bg-ws-teal/30 text-ws-teal rounded text-xs font-medium transition-colors"
                   >
                     📂 Open in Finder
                   </button>
                   <button
-                    onClick={() => {
-                      fetch(`${API_BASE}/config/open-env`, { method: 'POST' })
-                        .then(res => res.json())
-                        .then(data => {
-                          if (!data.success) alert(data.message || 'Could not open file');
-                        });
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`${API_BASE}/config/open-env`, { method: 'POST' });
+                        const data = await res.json();
+                        if (!data.success) {
+                          alert(data.message || 'Could not open file');
+                        }
+                      } catch (err) {
+                        alert(`Network error: ${err.message}. Make sure the backend is running.`);
+                      }
                     }}
                     className="px-3 py-1.5 bg-ws-teal/20 hover:bg-ws-teal/30 text-ws-teal rounded text-xs font-medium transition-colors"
                   >
@@ -3227,6 +3235,36 @@ WINDSURF_AZURE_PATH=${azureConfig.path || 'logs/'}`;
                 <pre className="bg-ws-bg rounded p-2 mt-2 text-xs text-ws-text font-mono">
                   cd windsurf-logger && ./dashboard/start.sh
                 </pre>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`${API_BASE}/config/restart-backend`, { method: 'POST' });
+                        const data = await res.json();
+                        if (data.success) {
+                          alert('Backend restart initiated. The page will reload in 3 seconds...');
+                          setTimeout(() => window.location.reload(), 3000);
+                        } else {
+                          alert(data.message || 'Could not restart backend');
+                        }
+                      } catch (err) {
+                        alert(`Network error: ${err.message}. You may need to restart manually.`);
+                      }
+                    }}
+                    className="px-3 py-1.5 bg-ws-orange/20 hover:bg-ws-orange/30 text-ws-orange rounded text-xs font-medium transition-colors"
+                  >
+                    🔄 Restart Backend
+                  </button>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText('cd windsurf-logger && ./dashboard/start.sh');
+                      alert('Command copied to clipboard!');
+                    }}
+                    className="px-3 py-1.5 bg-ws-teal/20 hover:bg-ws-teal/30 text-ws-teal rounded text-xs font-medium transition-colors"
+                  >
+                    📋 Copy Command
+                  </button>
+                </div>
               </div>
 
               {/* Security Note */}
