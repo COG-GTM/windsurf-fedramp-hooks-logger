@@ -495,7 +495,7 @@ function App() {
 
   const formatSessionName = (session) => {
     if (session.id === 'no_session') {
-      return 'Ungrouped Prompts';
+      return 'All Prompts';
     }
     
     // Get user from first event that has a user
@@ -653,7 +653,7 @@ function App() {
                   onChange={() => toggleFileSelection(file.path)}
                   className="w-3 h-3 rounded border-ws-border bg-ws-card text-ws-teal focus:ring-ws-teal focus:ring-offset-0"
                 />
-                <FileText className={`w-4 h-4 ${file.type === 'jsonl' ? 'text-ws-teal' : 'text-ws-text-muted'}`} />
+                <FileText className="w-4 h-4 text-ws-text-muted" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm truncate">{file.name}</p>
                   {file.entries > 0 && (
@@ -680,9 +680,10 @@ function App() {
             <div className="flex items-center gap-4">
               <button 
                 onClick={() => setSidebarOpen(!sidebarOpen)}
-                className="p-2 hover:bg-ws-card rounded text-ws-text-muted hover:text-ws-text transition-colors"
+                className="p-2 hover:bg-ws-card rounded text-ws-text-muted hover:text-ws-text transition-all duration-200 hover:scale-110"
+                title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
               >
-                <BarChart3 className="w-5 h-5" />
+                <BarChart3 className={`w-5 h-5 transition-transform duration-300 ${sidebarOpen ? 'rotate-180' : ''}`} />
               </button>
               <div>
                 <h1 className="text-xl font-semibold text-ws-text">Windsurf Hooks Logger</h1>
@@ -1309,7 +1310,7 @@ function WorkflowView({
             <div>
               <h2 className="text-lg font-semibold text-ws-text">Session Workflow</h2>
               <p className="text-sm text-ws-text-muted font-mono">
-                {selectedSession === 'no_session' ? 'Ungrouped Prompts' : selectedSession.substring(0, 24) + '...'}
+                {selectedSession === 'no_session' ? 'All Prompts' : selectedSession.substring(0, 24) + '...'}
               </p>
             </div>
           </div>
