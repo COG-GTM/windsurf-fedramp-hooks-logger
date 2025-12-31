@@ -60,6 +60,7 @@ function App() {
   const [dateTo, setDateTo] = useState('');
   const [useRegex, setUseRegex] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [expandedEntries, setExpandedEntries] = useState(new Set());
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
@@ -229,6 +230,7 @@ function App() {
   }, [searchQuery, filterCategory, filterUser, filterSession, dateFrom, dateTo, useRegex, currentDir, addToast]);
 
   const refreshAll = async () => {
+    setIsRefreshing(true);
     addToast('Refreshing all data...', 'info');
     await Promise.all([
       fetchFiles(currentDir),
@@ -236,6 +238,7 @@ function App() {
       fetchSessions(),
       fetchLogs()
     ]);
+    setIsRefreshing(false);
     addToast('Data refreshed', 'success');
   };
 
@@ -691,9 +694,10 @@ function App() {
                 onClick={refreshAll}
                 className="flex items-center gap-2 px-3 py-1.5 bg-ws-card hover:bg-ws-card-hover border border-ws-border rounded text-sm text-ws-text-secondary hover:text-ws-text transition-colors"
                 title="Refresh all data"
+                disabled={isRefreshing}
               >
-                <RefreshCw className="w-4 h-4" />
-                <span className="hidden sm:inline">Refresh</span>
+                <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'refresh-spinning' : ''}`} />
+                <span className="hidden sm:inline">{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
               </button>
               <button
                 onClick={() => setShowFilePicker(true)}
@@ -839,7 +843,7 @@ function App() {
 
           {/* Advanced Search Panel */}
           {showAdvancedSearch && (
-            <div className="mt-4 p-4 bg-ws-card rounded border border-ws-border slide-up">
+            <div className="mt-4 p-4 bg-ws-card rounded border border-ws-border panel-expand-bounce">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-medium text-ws-text">Advanced Filters</h3>
                 <button onClick={() => setShowAdvancedSearch(false)} className="text-ws-text-muted hover:text-ws-text">
@@ -921,7 +925,7 @@ function App() {
         </header>
 
         {/* Log Entries */}
-        <div ref={logContainerRef} className="flex-1 overflow-auto p-6">
+        <div ref={logContainerRef} className="flex-1 overflow-auto p-6" key={viewMode}>
           {loading ? (
             <LoadingSkeleton />
           ) : viewMode === 'workflow' ? (
@@ -939,19 +943,21 @@ function App() {
               onSelectSession={setSelectedSession}
             />
           ) : filteredLogs.length === 0 ? (
-            <EmptyState 
-              hasFilters={filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || searchQuery || dateFrom || dateTo}
-              onClearFilters={() => {
-                setFilterCategory('all');
-                setFilterUser('all');
-                setFilterSession('all');
-                setDateFrom('');
-                setDateTo('');
-                setSearchQuery('');
-                setUseRegex(false);
-                setTimeout(() => fetchLogs(), 0);
-              }}
-            />
+            <div className="page-enter">
+              <EmptyState 
+                hasFilters={filterCategory !== 'all' || filterUser !== 'all' || filterSession !== 'all' || searchQuery || dateFrom || dateTo}
+                onClearFilters={() => {
+                  setFilterCategory('all');
+                  setFilterUser('all');
+                  setFilterSession('all');
+                  setDateFrom('');
+                  setDateTo('');
+                  setSearchQuery('');
+                  setUseRegex(false);
+                  setTimeout(() => fetchLogs(), 0);
+                }}
+              />
+            </div>
           ) : viewMode === 'timeline' ? (
             <TimelineView
               sessions={sessions}
@@ -962,7 +968,7 @@ function App() {
               copyToClipboard={copyToClipboard}
             />
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-3 stagger-children">
               {filteredLogs.map((entry, idx) => (
                 <LogEntry
                   key={entry.event_id || entry.id || idx}
@@ -1026,17 +1032,27 @@ function LoadingSkeleton() {
   return (
     <div className="space-y-3">
       {[1, 2, 3, 4, 5].map(i => (
-        <div key={i} className="bg-ws-card border border-ws-border rounded-lg p-4" style={{ animationDelay: `${i * 100}ms` }}>
+        <div 
+          key={i} 
+          className="bg-ws-card border border-ws-border rounded-lg p-4 card-load-in loading-pulse" 
+          style={{ animationDelay: `${i * 80}ms` }}
+        >
           <div className="flex items-center gap-4">
-            <div className="w-10 h-10 rounded-lg skeleton" />
+            <div className={`w-10 h-10 rounded-lg skeleton-enhanced loading-wave loading-wave-delay-${i}`} />
             <div className="flex-1">
-              <div className="h-4 w-28 rounded skeleton mb-2" />
-              <div className="h-3 w-56 rounded skeleton" />
+              <div className="h-4 w-28 rounded skeleton-enhanced mb-2" />
+              <div className="h-3 w-56 rounded skeleton-enhanced" />
             </div>
-            <div className="h-4 w-36 rounded skeleton" />
+            <div className="h-4 w-36 rounded skeleton-enhanced" />
           </div>
         </div>
       ))}
+      {/* Loading dots indicator */}
+      <div className="flex items-center justify-center gap-2 py-4">
+        <div className="w-2 h-2 rounded-full bg-ws-teal loading-dot" />
+        <div className="w-2 h-2 rounded-full bg-ws-teal loading-dot" />
+        <div className="w-2 h-2 rounded-full bg-ws-teal loading-dot" />
+      </div>
     </div>
   );
 }
@@ -1072,7 +1088,7 @@ function ToastContainer({ toasts }) {
       {toasts.map(toast => (
         <div
           key={toast.id}
-          className={`px-4 py-3 rounded shadow-lg toast-enter flex items-center gap-2 ${
+          className={`px-4 py-3 rounded-lg shadow-lg sheet-slide-up flex items-center gap-2 ${
             toast.type === 'error' ? 'bg-red-500/90 text-white' :
             toast.type === 'success' ? 'bg-ws-teal/90 text-white' :
             'bg-ws-card text-ws-text border border-ws-border'
@@ -1089,13 +1105,17 @@ function ToastContainer({ toasts }) {
 
 function TimelineView({ sessions, expandedEntries, toggleEntry, formatTimestamp, truncateContent, copyToClipboard }) {
   if (!sessions || sessions.length === 0) {
-    return <EmptyState hasFilters={false} />;
+    return <div className="page-enter"><EmptyState hasFilters={false} /></div>;
   }
 
   return (
-    <div className="space-y-4">
-      {sessions.slice(0, 10).map(session => (
-        <div key={session.id} className="bg-ws-card border border-ws-border rounded overflow-hidden slide-in">
+    <div className="space-y-4 page-enter stagger-children">
+      {sessions.slice(0, 10).map((session, idx) => (
+        <div 
+          key={session.id} 
+          className="bg-ws-card border border-ws-border rounded overflow-hidden card-load-in"
+          style={{ animationDelay: `${idx * 60}ms` }}
+        >
           {/* Session Header */}
           <div className="p-4 border-b border-ws-border bg-ws-sidebar">
             <div className="flex items-center justify-between">
@@ -1278,9 +1298,9 @@ function WorkflowView({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 page-enter">
       {/* Session Header */}
-      <div className="bg-gradient-to-r from-ws-card to-ws-bg border border-ws-border rounded-xl p-6">
+      <div className="bg-gradient-to-r from-ws-card to-ws-bg border border-ws-border rounded-xl p-6 page-fade-in">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-xl bg-ws-teal/10 flex items-center justify-center">
@@ -1315,7 +1335,7 @@ function WorkflowView({
       </div>
 
       {/* Workflow Groups */}
-      <div className="space-y-4">
+      <div className="space-y-4 stagger-children">
         {workflowGroups.map((group, groupIdx) => (
           <WorkflowGroup
             key={group.id}
@@ -1422,7 +1442,7 @@ function WorkflowGroup({
 
       {/* Expanded Content */}
       {isExpanded && (
-        <div className="border-t border-ws-border bg-ws-bg/50">
+        <div className="border-t border-ws-border bg-ws-bg/50 panel-expand-bounce">
           {/* Full Prompt Text */}
           {group.prompt && (
             <div className="p-5 border-b border-ws-border">
@@ -1656,7 +1676,9 @@ function LogEntry({ entry, isExpanded, onToggle, formatTimestamp, truncateConten
 
       {/* Expanded Content */}
       {isExpanded && (
-        <ExpandedEventContent entry={entry} copyToClipboard={copyToClipboard} />
+        <div className="panel-expand-bounce">
+          <ExpandedEventContent entry={entry} copyToClipboard={copyToClipboard} />
+        </div>
       )}
     </div>
   );
@@ -1935,8 +1957,8 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="bg-ws-card border border-ws-border rounded w-full max-w-lg max-h-[80vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 modal-backdrop">
+      <div className="bg-ws-card border border-ws-border rounded w-full max-w-lg max-h-[80vh] flex flex-col modal-bounce">
         <div className="flex items-center justify-between p-4 border-b border-ws-border">
           <h2 className="text-base font-semibold text-ws-text">Select Log Directory</h2>
           <button
@@ -1976,7 +1998,7 @@ function DirectoryPicker({ currentDir, onSelect, onClose }) {
 
           {loading ? (
             <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-5 w-5 border-2 border-ws-teal border-t-transparent"></div>
+              <div className="rounded-full h-5 w-5 border-2 border-ws-teal border-t-transparent spinner-smooth"></div>
             </div>
           ) : error ? (
             <div className="flex flex-col items-center justify-center py-8 text-center">
