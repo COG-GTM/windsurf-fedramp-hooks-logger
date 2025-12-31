@@ -527,13 +527,6 @@ function App() {
                 <span className="text-[10px] text-ws-text-muted">Analytics Dashboard</span>
               </div>
             </div>
-            <button 
-              onClick={() => setSidebarOpen(!sidebarOpen)}
-              className="p-1.5 hover:bg-ws-card rounded text-ws-text-muted hover:text-ws-text transition-all duration-200 opacity-70 hover:opacity-100"
-              title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-            >
-              <ChevronLeft className={`w-4 h-4 transition-transform duration-300 ${sidebarOpen ? '' : 'rotate-180'}`} />
-            </button>
           </div>
         </div>
 
