@@ -821,6 +821,132 @@ def get_sessions():
     return jsonify({"sessions": session_list})
 
 
+@app.route('/api/logs/metrics', methods=['GET'])
+@rate_limit
+def get_metrics():
+    """Get comprehensive metrics aggregated from ALL log entries."""
+    log_dir = request.args.get('dir', DEFAULT_LOG_DIR)
+    
+    all_events_path = os.path.join(log_dir, 'all_events.jsonl')
+    consolidated_path = os.path.join(log_dir, 'consolidated.jsonl')
+    log_path = all_events_path if os.path.exists(all_events_path) else consolidated_path
+    
+    if not os.path.exists(log_path):
+        return jsonify({
+            "total_events": 0,
+            "categories": {},
+            "hourly_activity": [0] * 24,
+            "daily_activity": [0] * 7,
+            "recent_days": [],
+            "top_files": [],
+            "top_commands": [],
+            "top_mcp_tools": [],
+            "unique_sessions": 0,
+            "total_lines_added": 0,
+            "total_lines_removed": 0,
+            "unique_files_count": 0,
+            "date_range": {"start": None, "end": None}
+        })
+    
+    entries = parse_jsonl_file(log_path)
+    
+    # Initialize aggregations
+    categories = {}
+    hourly_activity = [0] * 24
+    daily_activity = [0] * 7
+    file_changes = {}
+    command_usage = {}
+    mcp_usage = {}
+    sessions = set()
+    total_lines_added = 0
+    total_lines_removed = 0
+    timestamps = []
+    
+    # Process all entries
+    for entry in entries:
+        category = entry.get('category', entry.get('type', 'unknown'))
+        categories[category] = categories.get(category, 0) + 1
+        
+        # Timestamp-based aggregations
+        ts = entry.get('timestamp')
+        if ts:
+            timestamps.append(ts)
+            try:
+                dt = datetime.fromisoformat(ts.replace('Z', '+00:00'))
+                hourly_activity[dt.hour] += 1
+                daily_activity[dt.weekday()] += 1  # Monday = 0
+            except (ValueError, AttributeError):
+                pass
+        
+        # Session tracking
+        if entry.get('trajectory_id'):
+            sessions.add(entry['trajectory_id'])
+        
+        # File changes
+        if category == 'file_write':
+            data = entry.get('data', {})
+            file_path = data.get('file_path', entry.get('file_path', 'unknown'))
+            file_name = file_path.split('/')[-1] if file_path else 'unknown'
+            file_changes[file_name] = file_changes.get(file_name, 0) + 1
+            total_lines_added += data.get('total_lines_added', 0)
+            total_lines_removed += data.get('total_lines_removed', 0)
+        
+        # Command usage
+        if category == 'command':
+            data = entry.get('data', {})
+            cmd = data.get('command_line', entry.get('command_line', 'unknown'))
+            cmd_name = cmd.split()[0] if cmd else 'unknown'
+            command_usage[cmd_name] = command_usage.get(cmd_name, 0) + 1
+        
+        # MCP tool usage
+        if category == 'mcp':
+            data = entry.get('data', {})
+            tool = data.get('mcp_tool_name', data.get('mcp_full_tool', 'unknown'))
+            mcp_usage[tool] = mcp_usage.get(tool, 0) + 1
+    
+    # Recent 7 days activity
+    now = datetime.now()
+    recent_days = []
+    for i in range(6, -1, -1):
+        date = now - timedelta(days=i)
+        date_str = date.strftime('%Y-%m-%d')
+        day_label = date.strftime('%a')
+        count = sum(1 for ts in timestamps if ts.startswith(date_str))
+        recent_days.append({
+            "label": day_label,
+            "date": date_str,
+            "count": count
+        })
+    
+    # Sort and limit top lists
+    top_files = sorted(file_changes.items(), key=lambda x: x[1], reverse=True)[:10]
+    top_commands = sorted(command_usage.items(), key=lambda x: x[1], reverse=True)[:8]
+    top_mcp_tools = sorted(mcp_usage.items(), key=lambda x: x[1], reverse=True)[:8]
+    
+    # Date range
+    date_range = {"start": None, "end": None}
+    if timestamps:
+        timestamps.sort()
+        date_range["start"] = timestamps[0]
+        date_range["end"] = timestamps[-1]
+    
+    return jsonify({
+        "total_events": len(entries),
+        "categories": categories,
+        "hourly_activity": hourly_activity,
+        "daily_activity": daily_activity,
+        "recent_days": recent_days,
+        "top_files": [{"name": f, "count": c} for f, c in top_files],
+        "top_commands": [{"name": c, "count": n} for c, n in top_commands],
+        "top_mcp_tools": [{"name": t, "count": c} for t, c in top_mcp_tools],
+        "unique_sessions": len(sessions),
+        "total_lines_added": total_lines_added,
+        "total_lines_removed": total_lines_removed,
+        "unique_files_count": len(file_changes),
+        "date_range": date_range
+    })
+
+
 @app.route('/api/logs/export', methods=['GET'])
 @rate_limit
 def export_logs():
