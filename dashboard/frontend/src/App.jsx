@@ -684,7 +684,11 @@ function App() {
                 className="p-2 hover:bg-ws-card rounded text-ws-text-muted hover:text-ws-text transition-all duration-200 hover:scale-110"
                 title={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
               >
-                <BarChart3 className={`w-5 h-5 transition-transform duration-300 ${sidebarOpen ? 'rotate-180' : ''}`} />
+                {sidebarOpen ? (
+                  <ChevronLeft className="w-5 h-5 transition-transform duration-300" />
+                ) : (
+                  <ChevronRight className="w-5 h-5 transition-transform duration-300" />
+                )}
               </button>
               <div>
                 <h1 className="text-xl font-semibold text-ws-text">Windsurf Hooks Logger</h1>
