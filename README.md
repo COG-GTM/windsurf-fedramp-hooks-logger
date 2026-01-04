@@ -7,7 +7,7 @@ Comprehensive logging for all Windsurf Cascade hook events with a dashboard for 
 Copy the hooks configuration file to your Windsurf hooks directory:
 
 ```bash
-cp /Users/chasedalton/CascadeProjects/windsurf-logger/hooks.json ~/.codeium/windsurf/hooks.json
+cp /Users/[user]/CascadeProjects/windsurf-logger/hooks.json ~/.codeium/windsurf/hooks.json
 ```
 
 ## Captured Events
