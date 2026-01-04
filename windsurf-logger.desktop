@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Windsurf Logger Dashboard
+Comment=Launch Windsurf Logger Dashboard for reviewing Cascade hook events
+Exec=/bin/bash "/Users/chasedalton/CascadeProjects/windsurf-logger/dashboard/start.sh"
+Icon=utilities-terminal
+Terminal=true
+Categories=Development;Utility;
+Keywords=windsurf;logger;dashboard;cascade;

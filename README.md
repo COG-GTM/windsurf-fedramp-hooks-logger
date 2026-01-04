@@ -2,35 +2,89 @@
 
 Comprehensive logging for all Windsurf Cascade hook events with a dashboard for review and analysis.
 
-## Setup
+## Quick Start
 
-### Automatic Installation (Recommended)
-
-Run the install script to automatically configure hooks for your system:
+### 1. Install Hooks
 
 ```bash
 python3 install_hooks.py
 ```
 
-This will detect your Windsurf installation and create the appropriate `hooks.json` configuration.
+### 2. Launch Dashboard
 
-### Manual Installation
+**Option A: Cross-Platform Desktop Launcher (Recommended)**
+```bash
+# Creates appropriate launcher for your OS (Linux, macOS, or Windows)
+python3 create_launcher.py
 
-If you prefer manual setup:
+# Generate all platform launchers at once (for distribution)
+python3 create_launcher.py --all
+```
+Then double-click the created shortcut on your Desktop.
 
-1. Generate the hooks configuration for your system:
+**Option B: Shell Script (Linux/macOS)**
+```bash
+./create-desktop-launcher.sh   # Creates desktop shortcut
+# Or run directly:
+./dashboard/start.sh
+```
+
+**Option C: Batch File (Windows)**
+```cmd
+dashboard\start.bat
+```
+
+**Option D: Manual**
+```bash
+# Terminal 1 - Backend
+cd dashboard/backend
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+python app.py
+
+# Terminal 2 - Frontend  
+cd dashboard/frontend
+npm install && npm run dev
+```
+
+Open http://localhost:5174 in your browser.
+
+### Platform-Specific Launchers
+
+| Platform | Launcher File | Desktop Shortcut |
+|----------|---------------|------------------|
+| **Linux** | `dashboard/start.sh` | `windsurf-logger.desktop` |
+| **macOS** | `dashboard/start.sh` | `Windsurf Logger Dashboard.command` |
+| **Windows** | `dashboard\start.bat` | `Windsurf Logger Dashboard.bat` |
+
+Run `python3 create_launcher.py --all` to generate launchers for all platforms (useful for distribution).
+
+### 3. Stop Dashboard
+
+- **Desktop**: Press `Ctrl+C` in the terminal window
+- **Terminal launcher**: Press `Ctrl+C` in the terminal
+- **Manual**: Press `Ctrl+C` in both terminals
+
+---
+
+## Installation Details
+
+### Manual Hook Installation
+
+If the automatic installer fails:
+
+1. Generate configuration:
 ```bash
 python3 windsurf_paths.py
 ```
 
-2. Copy the generated hooks.json to your Windsurf hooks directory:
+2. Copy to Windsurf:
 ```bash
 cp hooks.json ~/.codeium/windsurf/hooks.json
 ```
 
 ### Verify Installation
 
-Check discovered paths and configuration:
 ```bash
 python3 install_hooks.py --show-paths
 python3 install_hooks.py --print-config
@@ -156,56 +210,18 @@ cat logs/sessions/abc123.jsonl | jq .
 cat logs/command.jsonl | jq 'select(.data.command_name == "npm")'
 ```
 
-## Dashboard
+---
 
-A modern web dashboard for viewing and filtering logs with real-time updates.
+## Dashboard Features
 
-### Quick Start (Recommended)
-
-Use the launcher script for automatic setup and startup:
-
-```bash
-cd dashboard
-chmod +x start.sh
-./start.sh
-```
-
-This script will:
-- Automatically create Python virtual environment if needed
-- Install all backend and frontend dependencies
-- Start both backend (port 5173) and frontend (port 5174) servers
-- Handle cleanup when you stop the dashboard
-
-Open http://localhost:5174 in your browser.
-
-### Manual Start
-
-If you prefer manual setup or need to run components separately:
-
-```bash
-# Terminal 1 - Backend
-cd dashboard/backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-python app.py
-
-# Terminal 2 - Frontend  
-cd dashboard/frontend
-npm install
-npm run dev
-```
-
-### Stopping the Dashboard
-
-- **Using launcher**: Press `Ctrl+C` in the terminal running `start.sh`
-- **Manual**: Press `Ctrl+C` in both backend and frontend terminals
-
-### Dashboard Features
 - **File Selection** - Select which log files to display
-- **Directory Browser** - Change log directory paths
+- **Directory Browser** - Change log directory paths  
 - **Search** - Full-text search across all logs
 - **Filters** - Filter by category, action, user, session
 - **Code Diff View** - View code changes with before/after
 - **Statistics** - Overview by category, user, and session
 - **Timeline View** - Chronological activity stream
+
+---
+
+## Log Files & Data Structure
