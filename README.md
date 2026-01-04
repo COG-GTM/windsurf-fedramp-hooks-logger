@@ -158,9 +158,11 @@ cat logs/command.jsonl | jq 'select(.data.command_name == "npm")'
 
 ## Dashboard
 
-A modern dashboard for viewing and filtering logs.
+A modern web dashboard for viewing and filtering logs with real-time updates.
 
-### Start the Dashboard
+### Quick Start (Recommended)
+
+Use the launcher script for automatic setup and startup:
 
 ```bash
 cd dashboard
@@ -168,7 +170,17 @@ chmod +x start.sh
 ./start.sh
 ```
 
-Or manually:
+This script will:
+- Automatically create Python virtual environment if needed
+- Install all backend and frontend dependencies
+- Start both backend (port 5173) and frontend (port 5174) servers
+- Handle cleanup when you stop the dashboard
+
+Open http://localhost:5174 in your browser.
+
+### Manual Start
+
+If you prefer manual setup or need to run components separately:
 
 ```bash
 # Terminal 1 - Backend
@@ -178,13 +190,16 @@ source venv/bin/activate
 pip install -r requirements.txt
 python app.py
 
-# Terminal 2 - Frontend
+# Terminal 2 - Frontend  
 cd dashboard/frontend
 npm install
 npm run dev
 ```
 
-Open http://localhost:5174 in your browser.
+### Stopping the Dashboard
+
+- **Using launcher**: Press `Ctrl+C` in the terminal running `start.sh`
+- **Manual**: Press `Ctrl+C` in both backend and frontend terminals
 
 ### Dashboard Features
 - **File Selection** - Select which log files to display
