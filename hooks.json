@@ -1,56 +1,57 @@
 {
+  "_comment": "TEMPLATE FILE - Do not use directly. Run 'python3 install_hooks.py' to automatically install hooks with correct paths for your system.",
   "hooks": {
     "pre_user_prompt": [
       {
-        "command": "python3 /Users/chasedalton/CascadeProjects/windsurf-logger/cascade_logger.py",
+        "command": "python3 {{LOGGER_PATH}}/cascade_logger.py",
         "timeout_ms": 5000
       }
     ],
     "pre_read_code": [
       {
-        "command": "python3 /Users/chasedalton/CascadeProjects/windsurf-logger/cascade_logger.py",
+        "command": "python3 {{LOGGER_PATH}}/cascade_logger.py",
         "timeout_ms": 5000
       }
     ],
     "post_read_code": [
       {
-        "command": "python3 /Users/chasedalton/CascadeProjects/windsurf-logger/cascade_logger.py",
+        "command": "python3 {{LOGGER_PATH}}/cascade_logger.py",
         "timeout_ms": 5000
       }
     ],
     "pre_write_code": [
       {
-        "command": "python3 /Users/chasedalton/CascadeProjects/windsurf-logger/cascade_logger.py",
+        "command": "python3 {{LOGGER_PATH}}/cascade_logger.py",
         "timeout_ms": 5000
       }
     ],
     "post_write_code": [
       {
-        "command": "python3 /Users/chasedalton/CascadeProjects/windsurf-logger/cascade_logger.py",
+        "command": "python3 {{LOGGER_PATH}}/cascade_logger.py",
         "timeout_ms": 5000
       }
     ],
     "pre_run_command": [
       {
-        "command": "python3 /Users/chasedalton/CascadeProjects/windsurf-logger/cascade_logger.py",
+        "command": "python3 {{LOGGER_PATH}}/cascade_logger.py",
         "timeout_ms": 5000
       }
     ],
     "post_run_command": [
       {
-        "command": "python3 /Users/chasedalton/CascadeProjects/windsurf-logger/cascade_logger.py",
+        "command": "python3 {{LOGGER_PATH}}/cascade_logger.py",
         "timeout_ms": 5000
       }
     ],
     "pre_mcp_tool_use": [
       {
-        "command": "python3 /Users/chasedalton/CascadeProjects/windsurf-logger/cascade_logger.py",
+        "command": "python3 {{LOGGER_PATH}}/cascade_logger.py",
         "timeout_ms": 5000
       }
     ],
     "post_mcp_tool_use": [
       {
-        "command": "python3 /Users/chasedalton/CascadeProjects/windsurf-logger/cascade_logger.py",
+        "command": "python3 {{LOGGER_PATH}}/cascade_logger.py",
         "timeout_ms": 5000
       }
     ]

@@ -19,12 +19,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy and install Python dependencies
 COPY dashboard/backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt gunicorn
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY config.py ./
 COPY cascade_logger.py ./
+COPY windsurf_paths.py ./
 COPY dashboard/backend/app.py ./dashboard/backend/
+COPY dashboard/backend/storage_adapters.py ./dashboard/backend/
 
 # Copy built frontend
 COPY --from=frontend-builder /app/frontend/dist ./dashboard/frontend/dist
