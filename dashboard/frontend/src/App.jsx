@@ -99,7 +99,7 @@ function App() {
   const [expandedEntries, setExpandedEntries] = useState(new Set());
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [showAdvancedSearch, setShowAdvancedSearch] = useState(false);
-  const [currentDir, setCurrentDir] = useState('/Users/chasedalton/CascadeProjects/windsurf-logger/logs');
+  const [currentDir, setCurrentDir] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [viewMode, setViewMode] = useState('workflow'); // 'workflow', 'timeline', 'list', or 'metrics'
   const [toasts, setToasts] = useState([]);
@@ -368,7 +368,20 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showFilePicker, showAdvancedSearch, selectedEntryIndex, logs]);
 
+  // Fetch default config from backend on initial load
   useEffect(() => {
+    fetch(`${API_BASE}/config/defaults`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.log_directory) {
+          setCurrentDir(data.log_directory);
+        }
+      })
+      .catch(err => console.error('Failed to fetch default config:', err));
+  }, []);
+
+  useEffect(() => {
+    if (!currentDir) return; // Wait for default config to load
     fetchFiles(currentDir);
     fetchStats();
     fetchAggregatedMetrics();

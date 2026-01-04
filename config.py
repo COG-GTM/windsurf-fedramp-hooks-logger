@@ -8,8 +8,28 @@ from pathlib import Path
 # Base directory (where this file lives)
 BASE_DIR = Path(__file__).parent.resolve()
 
-# Log directory - configurable via environment variable
-LOG_DIR = Path(os.getenv("WINDSURF_LOG_DIR", str(BASE_DIR / "logs")))
+# Log directory - defaults to Windsurf's standard data location
+# Falls back through: env var -> ~/.codeium/windsurf/logs -> ~/.windsurf/logs
+def get_default_log_dir():
+    """Discover the default log directory from Windsurf's configuration locations."""
+    # Check environment variable first
+    if os.getenv("WINDSURF_LOG_DIR"):
+        return Path(os.getenv("WINDSURF_LOG_DIR"))
+    
+    # Primary Windsurf data location
+    codeium_logs = Path("~/.codeium/windsurf/logs").expanduser()
+    if codeium_logs.exists():
+        return codeium_logs
+    
+    # Secondary location
+    windsurf_logs = Path("~/.windsurf/logs").expanduser()
+    if windsurf_logs.exists():
+        return windsurf_logs
+    
+    # Default to primary location (will be created when needed)
+    return codeium_logs
+
+LOG_DIR = get_default_log_dir()
 
 # Logger settings
 MAX_CONTENT_LENGTH = int(os.getenv("WINDSURF_MAX_CONTENT_LENGTH", "100000"))

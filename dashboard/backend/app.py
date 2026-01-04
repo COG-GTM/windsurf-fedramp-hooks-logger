@@ -1234,6 +1234,18 @@ def serve_static(path):
 
 
 # ============================================================================
+# Config Endpoints
+# ============================================================================
+@app.route('/api/config/defaults', methods=['GET'])
+def get_default_config():
+    """Return default configuration including log directory from Windsurf settings."""
+    return jsonify({
+        "log_directory": DEFAULT_LOG_DIR,
+        "log_directory_exists": os.path.exists(DEFAULT_LOG_DIR)
+    })
+
+
+# ============================================================================
 # Health & Monitoring Endpoints
 # ============================================================================
 @app.route('/health', methods=['GET'])
