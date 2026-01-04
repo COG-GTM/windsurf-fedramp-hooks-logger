@@ -1,28 +1,53 @@
 """
 Configuration management for Windsurf Logger.
-Loads settings from environment variables with sensible defaults.
+Loads settings from environment variables and Windsurf user settings.
 """
 import os
 from pathlib import Path
 
+# Import path discovery utilities
+try:
+    from windsurf_paths import (
+        get_default_log_output_dir,
+        get_windsurf_data_dir,
+        read_windsurf_user_settings,
+    )
+    _has_windsurf_paths = True
+except ImportError:
+    _has_windsurf_paths = False
+
 # Base directory (where this file lives)
 BASE_DIR = Path(__file__).parent.resolve()
 
-# Log directory - defaults to Windsurf's standard data location
-# Falls back through: env var -> ~/.codeium/windsurf/logs -> ~/.windsurf/logs
+# Log directory - uses Windsurf path discovery
 def get_default_log_dir():
-    """Discover the default log directory from Windsurf's configuration locations."""
+    """
+    Discover the default log directory.
+    
+    Priority:
+    1. WINDSURF_LOG_DIR environment variable
+    2. Windsurf data directory logs (discovered dynamically)
+    3. Falls back to ./logs relative to this script
+    """
     # Check environment variable first
-    if os.getenv("WINDSURF_LOG_DIR"):
-        return Path(os.getenv("WINDSURF_LOG_DIR"))
+    env_dir = os.getenv("WINDSURF_LOG_DIR")
+    if env_dir:
+        return Path(env_dir).expanduser()
+    
+    # Use windsurf_paths module if available
+    if _has_windsurf_paths:
+        return get_default_log_output_dir()
+    
+    # Fallback: discover standard locations
+    home = Path.home()
     
     # Primary Windsurf data location
-    codeium_logs = Path("~/.codeium/windsurf/logs").expanduser()
+    codeium_logs = home / ".codeium" / "windsurf" / "logs"
     if codeium_logs.exists():
         return codeium_logs
     
     # Secondary location
-    windsurf_logs = Path("~/.windsurf/logs").expanduser()
+    windsurf_logs = home / ".windsurf" / "logs"
     if windsurf_logs.exists():
         return windsurf_logs
     

@@ -4,10 +4,36 @@ Comprehensive logging for all Windsurf Cascade hook events with a dashboard for 
 
 ## Setup
 
-Copy the hooks configuration file to your Windsurf hooks directory:
+### Automatic Installation (Recommended)
+
+Run the install script to automatically configure hooks for your system:
 
 ```bash
-cp /Users/[user]/CascadeProjects/windsurf-logger/hooks.json ~/.codeium/windsurf/hooks.json
+python3 install_hooks.py
+```
+
+This will detect your Windsurf installation and create the appropriate `hooks.json` configuration.
+
+### Manual Installation
+
+If you prefer manual setup:
+
+1. Generate the hooks configuration for your system:
+```bash
+python3 windsurf_paths.py
+```
+
+2. Copy the generated hooks.json to your Windsurf hooks directory:
+```bash
+cp hooks.json ~/.codeium/windsurf/hooks.json
+```
+
+### Verify Installation
+
+Check discovered paths and configuration:
+```bash
+python3 install_hooks.py --show-paths
+python3 install_hooks.py --print-config
 ```
 
 ## Captured Events
@@ -28,7 +54,7 @@ All 9 available Cascade hook events are captured:
 
 ## Log Files
 
-All logs are stored in `/Users/[user]/CascadeProjects/windsurf-logger/logs/`:
+By default, logs are stored in `~/.codeium/windsurf/logs/` (or the directory specified by `WINDSURF_LOG_DIR` environment variable):
 
 ### Master Log
 - **all_events.jsonl** - Every event in chronological order
@@ -121,7 +147,7 @@ cat logs/prompt.jsonl | jq .
 cat logs/file_write.jsonl | jq 'select(.data.file_extension == "py")'
 
 # Commands by a specific user
-cat logs/command.jsonl | jq 'select(.system.username == "[name]")'
+cat logs/command.jsonl | jq 'select(.system.username == "yourusername")'
 
 # Events in a specific session
 cat logs/sessions/abc123.jsonl | jq .
