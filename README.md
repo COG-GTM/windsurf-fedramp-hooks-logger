@@ -28,7 +28,7 @@ All 9 available Cascade hook events are captured:
 
 ## Log Files
 
-All logs are stored in `/Users/chasedalton/CascadeProjects/windsurf-logger/logs/`:
+All logs are stored in `/Users/[user]/CascadeProjects/windsurf-logger/logs/`:
 
 ### Master Log
 - **all_events.jsonl** - Every event in chronological order
@@ -121,7 +121,7 @@ cat logs/prompt.jsonl | jq .
 cat logs/file_write.jsonl | jq 'select(.data.file_extension == "py")'
 
 # Commands by a specific user
-cat logs/command.jsonl | jq 'select(.system.username == "chase")'
+cat logs/command.jsonl | jq 'select(.system.username == "[name]")'
 
 # Events in a specific session
 cat logs/sessions/abc123.jsonl | jq .
