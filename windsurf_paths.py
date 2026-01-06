@@ -207,7 +207,7 @@ def generate_hooks_config() -> Dict[str, Any]:
     # Use double quotes which work on both Windows and Unix
     hook_entry = {
         "command": f'{python_cmd} "{script_path}"',
-        "timeout_ms": 5000
+        "show_output": False
     }
     
     return {

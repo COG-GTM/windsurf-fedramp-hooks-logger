@@ -161,8 +161,8 @@ call start.bat
     # Desktop version uses absolute path (works from anywhere)
     desktop_dir = Path.home() / "Desktop"
     if desktop_dir.exists():
-        # Convert path to Windows format
-        win_dashboard_dir = str(dashboard_dir).replace('/', '\\\\')
+        # On Windows, Path objects already use backslashes; just ensure forward slashes are converted
+        win_dashboard_dir = str(dashboard_dir).replace('/', '\\')
         desktop_launcher_content = f"""@echo off
 REM Windsurf Logger Dashboard Launcher
 REM Launches dashboard from Desktop shortcut

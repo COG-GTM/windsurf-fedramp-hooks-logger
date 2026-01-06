@@ -21,12 +21,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY dashboard/backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application files
+# Copy application files - maintain directory structure for imports
 COPY config.py ./
 COPY cascade_logger.py ./
 COPY windsurf_paths.py ./
 COPY dashboard/backend/app.py ./dashboard/backend/
 COPY dashboard/backend/storage_adapters.py ./dashboard/backend/
+# Create __init__.py files for proper Python package structure
+RUN touch ./dashboard/__init__.py ./dashboard/backend/__init__.py
 
 # Copy built frontend
 COPY --from=frontend-builder /app/frontend/dist ./dashboard/frontend/dist
@@ -40,6 +42,7 @@ ENV FLASK_HOST=0.0.0.0
 ENV FLASK_PORT=5173
 ENV FLASK_DEBUG=false
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
@@ -49,4 +52,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 5173
 
 # Run with gunicorn for production
-CMD ["gunicorn", "--bind", "0.0.0.0:5173", "--workers", "2", "--threads", "4", "dashboard.backend.app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5173", "--workers", "2", "--threads", "4", "--chdir", "/app/dashboard/backend", "app:app"]
