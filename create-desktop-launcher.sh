@@ -32,7 +32,7 @@ case "$OS_TYPE" in
         DESKTOP_FILE="$SCRIPT_DIR/windsurf-logger.desktop"
         APPLICATIONS_DIR="$HOME/.local/share/applications"
         
-        # Generate .desktop file with correct paths
+        # Generate .desktop file with correct absolute paths
         cat > "$DESKTOP_FILE" << EOF
 [Desktop Entry]
 Version=1.0
@@ -44,6 +44,7 @@ Icon=utilities-terminal
 Terminal=true
 Categories=Development;Utility;
 Keywords=windsurf;logger;dashboard;cascade;
+Path=$SCRIPT_DIR
 EOF
         
         chmod +x "$DESKTOP_FILE"
@@ -66,9 +67,14 @@ EOF
         # macOS: Create .command file (double-clickable in Finder)
         COMMAND_FILE="$SCRIPT_DIR/Windsurf Logger Dashboard.command"
         
-        cat > "$COMMAND_FILE" << EOF
+        # In-repo version uses SCRIPT_DIR (works when run from repo)
+        cat > "$COMMAND_FILE" << 'EOF'
 #!/bin/bash
 # Windsurf Logger Dashboard Launcher for macOS
+# Double-click this file in Finder to launch the dashboard
+
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/dashboard"
 "$SCRIPT_DIR/dashboard/start.sh"
 EOF
@@ -76,9 +82,18 @@ EOF
         chmod +x "$COMMAND_FILE"
         echo "✅ macOS launcher created: $COMMAND_FILE"
         
-        # Copy to desktop
+        # Desktop version uses absolute path (works from anywhere)
         if [ -d "$DESKTOP_DIR" ]; then
-            cp "$COMMAND_FILE" "$DESKTOP_DIR/"
+            cat > "$DESKTOP_DIR/Windsurf Logger Dashboard.command" << EOF
+#!/bin/bash
+# Windsurf Logger Dashboard Launcher for macOS
+# Double-click this file in Finder to launch the dashboard
+
+# Absolute path to the windsurf-fedramp-hooks-logger repo
+REPO_DIR="$SCRIPT_DIR"
+cd "\$REPO_DIR/dashboard"
+"\$REPO_DIR/dashboard/start.sh"
+EOF
             chmod +x "$DESKTOP_DIR/Windsurf Logger Dashboard.command"
             echo "✅ Desktop shortcut created: $DESKTOP_DIR/Windsurf Logger Dashboard.command"
         fi

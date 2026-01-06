@@ -96,8 +96,8 @@ def create_macos_launcher() -> bool:
     """Create .command file for macOS (double-clickable in Finder)."""
     project_dir = get_project_dir()
     
-    # Use relative path from the .command file location (project root)
-    command_content = """#!/bin/bash
+    # In-repo version uses SCRIPT_DIR (works when run from repo)
+    repo_command_content = """#!/bin/bash
 # Windsurf Logger Dashboard Launcher for macOS
 # Double-click this file in Finder to launch the dashboard
 
@@ -109,15 +109,24 @@ cd "$SCRIPT_DIR/dashboard"
     
     # Write .command file to project directory
     command_file = project_dir / "Windsurf Logger Dashboard.command"
-    command_file.write_text(command_content)
+    command_file.write_text(repo_command_content)
     command_file.chmod(command_file.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     print(f"✅ macOS launcher created: {command_file}")
     
-    # Copy to Desktop if it exists
+    # Desktop version uses absolute path (works from anywhere)
     desktop_dir = Path.home() / "Desktop"
     if desktop_dir.exists():
+        desktop_command_content = f"""#!/bin/bash
+# Windsurf Logger Dashboard Launcher for macOS
+# Double-click this file in Finder to launch the dashboard
+
+# Absolute path to the windsurf-fedramp-hooks-logger repo
+REPO_DIR="{project_dir}"
+cd "$REPO_DIR/dashboard"
+"$REPO_DIR/dashboard/start.sh"
+"""
         dest = desktop_dir / "Windsurf Logger Dashboard.command"
-        dest.write_text(command_content)
+        dest.write_text(desktop_command_content)
         dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         print(f"✅ Desktop shortcut created: {dest}")
     
@@ -137,23 +146,31 @@ def create_windows_launcher() -> bool:
         print(f"⚠️  Warning: start.bat not found at {bat_file}")
         print("   The dashboard may not start correctly.")
     
-    # Create desktop launcher batch file with relative path
-    # %~dp0 expands to the directory containing the batch file
-    launcher_content = """@echo off
+    # In-repo version uses %~dp0 (works when run from repo)
+    repo_launcher_content = """@echo off
 REM Windsurf Logger Dashboard Launcher
+REM Run this from the repo directory
 cd /d "%~dp0dashboard"
 call start.bat
 """
     
     launcher_file = project_dir / "Windsurf Logger Dashboard.bat"
-    write_windows_text(launcher_file, launcher_content)
+    write_windows_text(launcher_file, repo_launcher_content)
     print(f"✅ Windows launcher created: {launcher_file}")
     
-    # Copy to Desktop if it exists
+    # Desktop version uses absolute path (works from anywhere)
     desktop_dir = Path.home() / "Desktop"
     if desktop_dir.exists():
+        # Convert path to Windows format
+        win_dashboard_dir = str(dashboard_dir).replace('/', '\\\\')
+        desktop_launcher_content = f"""@echo off
+REM Windsurf Logger Dashboard Launcher
+REM Launches dashboard from Desktop shortcut
+cd /d "{win_dashboard_dir}"
+call start.bat
+"""
         dest = desktop_dir / "Windsurf Logger Dashboard.bat"
-        write_windows_text(dest, launcher_content)
+        write_windows_text(dest, desktop_launcher_content)
         print(f"✅ Desktop shortcut created: {dest}")
     
     return True
