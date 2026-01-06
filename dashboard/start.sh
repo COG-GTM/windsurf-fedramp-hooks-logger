@@ -85,7 +85,7 @@ fi
 # Start backend (venv already activated above)
 echo "🔧 Starting backend server on port 5173..."
 cd "$BACKEND_DIR"
-$PYTHON_CMD app.py &
+"$PYTHON_CMD" app.py &
 BACKEND_PID=$!
 
 # Wait for backend to start
@@ -145,6 +145,6 @@ echo ""
 echo "Press Ctrl+C to stop both servers"
 
 # Cleanup on exit
-trap "kill $BACKEND_PID $FRONTEND_PID 2>/dev/null" EXIT
+trap '([ -n "${BACKEND_PID:-}" ] && kill "$BACKEND_PID" 2>/dev/null) || true; ([ -n "${FRONTEND_PID:-}" ] && kill "$FRONTEND_PID" 2>/dev/null) || true' EXIT
 
 wait

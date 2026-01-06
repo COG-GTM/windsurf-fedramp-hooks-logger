@@ -507,7 +507,8 @@ def get_log_files():
             for f in files[:20]:  # Only count entries for first 20 files
                 f['entries'] = 0  # Will be populated on demand
             
-            result = {"files": files, "directory": log_dir, "storage_type": get_current_storage_config().get('type', 'remote')}
+            storage_config = get_current_storage_config()
+            result = {"files": files, "directory": log_dir, "storage_type": storage_config.get('type', 'remote') if storage_config else 'remote'}
             cache.set(cache_key, result)
             return jsonify(result)
         except Exception as e:
@@ -1072,7 +1073,8 @@ def get_metrics():
         if category == 'command':
             data = entry.get('data', {})
             cmd = data.get('command_line', entry.get('command_line', 'unknown'))
-            cmd_name = cmd.split()[0] if cmd else 'unknown'
+            cmd_parts = cmd.split() if cmd else []
+            cmd_name = cmd_parts[0] if cmd_parts else 'unknown'
             command_usage[cmd_name] = command_usage.get(cmd_name, 0) + 1
         
         # MCP tool usage

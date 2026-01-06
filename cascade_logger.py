@@ -254,7 +254,7 @@ def compute_content_hash(content: Any) -> str:
     return hashlib.md5(content_str.encode()).hexdigest()[:12]
 
 
-def truncate_content(content: str, max_length: int = MAX_CONTENT_LENGTH) -> "tuple[str, bool]":
+def truncate_content(content: str, max_length: int = MAX_CONTENT_LENGTH) -> tuple[str, bool]:
     """Truncate content if too long, return content and truncation flag."""
     if len(content) > max_length:
         return content[:max_length], True

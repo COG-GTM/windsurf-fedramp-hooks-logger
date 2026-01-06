@@ -20,7 +20,7 @@ def write_windows_text(filepath: Path, content: str):
 
 def get_project_dir() -> Path:
     """Get the project directory (where this script is located)."""
-    return Path(__file__).parent.resolve()
+    return Path(__file__).parent.resolve()  
 
 
 def get_dashboard_dir() -> Path:
@@ -44,7 +44,7 @@ def cleanup_desktop_shortcuts(current_system: str) -> None:
         try:
             if path.exists():
                 path.unlink()
-        except Exception:
+        except OSError:
             pass
 
 
