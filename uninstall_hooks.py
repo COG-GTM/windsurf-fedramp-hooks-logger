@@ -273,6 +273,47 @@ Examples:
         print(f"  logs_dir: {get_windsurf_logs_dir()}")
         print(f"  repo_dir: {get_repo_dir()}")
         print()
+
+    def prompt_yes_no(question: str, default: bool = False) -> bool:
+        prompt = " [Y/n] " if default else " [y/N] "
+        while True:
+            resp = input(question + prompt).strip().lower()
+            if resp == "":
+                return default
+            if resp in ("y", "yes"):
+                return True
+            if resp in ("n", "no"):
+                return False
+            print("Please enter y or n.")
+
+    any_delete_flag = args.delete_logs or args.delete_repo or args.delete_all
+    if not args.force and not any_delete_flag:
+        if not sys.stdin.isatty():
+            print(
+                "Non-interactive mode detected. Please pass explicit options like --delete-logs, --delete-repo, or --delete-all.",
+                file=sys.stderr,
+            )
+            return 2
+
+        print("Optional cleanup (hooks uninstall will still run):")
+        print()
+
+        args.delete_logs = prompt_yes_no(
+            f"Delete Windsurf logs at {get_windsurf_logs_dir()}? This permanently removes your audit history.",
+            default=False,
+        )
+        args.delete_repo = prompt_yes_no(
+            f"Delete this local repository at {get_repo_dir()}? This removes the source code/dashboard and cannot be undone.",
+            default=False,
+        )
+
+        if args.delete_repo:
+            confirm = input("Type DELETE to confirm repository deletion: ").strip()
+            if confirm != "DELETE":
+                print("Repository deletion not confirmed; will not delete repo.")
+                args.delete_repo = False
+
+        print()
     
     if args.dry_run:
         print("Dry run - no changes made:")
