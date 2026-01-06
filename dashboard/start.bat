@@ -1,4 +1,5 @@
 @echo off
+setlocal EnableDelayedExpansion
 REM Windsurf Logger Dashboard Startup Script for Windows
 
 set SCRIPT_DIR=%~dp0
@@ -7,22 +8,67 @@ set FRONTEND_DIR=%SCRIPT_DIR%frontend
 
 echo 🚀 Starting Windsurf Logger Dashboard...
 
+REM Check for Python 3
+where python >nul 2>&1
+if errorlevel 1 (
+    echo ❌ Error: Python is not installed or not in PATH.
+    echo    Please install Python 3 and try again.
+    pause
+    exit /b 1
+)
+
+REM Verify it's Python 3
+python --version 2>&1 | findstr /R "Python 3\." >nul
+if errorlevel 1 (
+    echo ❌ Error: Python 3 is required but a different version was found.
+    echo    Please install Python 3 and try again.
+    pause
+    exit /b 1
+)
+
+echo    Using: Python
+for /f "tokens=*" %%i in ('python --version 2^>^&1') do echo    %%i
+
 REM Check if Python virtual environment exists
 if not exist "%BACKEND_DIR%\venv" (
     echo 📦 Creating Python virtual environment...
     python -m venv "%BACKEND_DIR%\venv"
+    if errorlevel 1 (
+        echo ❌ Error: Failed to create Python virtual environment.
+        pause
+        exit /b 1
+    )
 )
 
 REM Activate virtual environment and install dependencies
 echo 📦 Installing backend dependencies...
 call "%BACKEND_DIR%\venv\Scripts\activate.bat"
+if errorlevel 1 (
+    echo ❌ Error: Failed to activate virtual environment.
+    pause
+    exit /b 1
+)
 pip install -q -r "%BACKEND_DIR%\requirements.txt"
+
+REM Check for npm/node
+where npm >nul 2>&1
+if errorlevel 1 (
+    echo ❌ Error: npm is required but not found.
+    echo    Please install Node.js and npm, then try again.
+    pause
+    exit /b 1
+)
 
 REM Check if node_modules exists
 if not exist "%FRONTEND_DIR%\node_modules" (
     echo 📦 Installing frontend dependencies...
     cd /d "%FRONTEND_DIR%"
     npm install
+    if errorlevel 1 (
+        echo ❌ Error: Failed to install frontend dependencies.
+        pause
+        exit /b 1
+    )
 )
 
 REM Start backend in a new window
@@ -38,9 +84,24 @@ echo 🎨 Starting frontend dev server on port 5174...
 cd /d "%FRONTEND_DIR%"
 start "Windsurf Frontend" cmd /c "npm run dev"
 
+set DASHBOARD_URL=
+REM Wait for frontend to start before checking ports
+timeout /t 3 /nobreak > nul
+for /L %%P in (5174,1,5190) do (
+    powershell -NoProfile -Command "try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 1 -Uri ('http://localhost:%%P/'); exit 0 } catch { exit 1 }"
+    if !errorlevel! equ 0 (
+        set "DASHBOARD_URL=http://localhost:%%P"
+        goto :OPEN_BROWSER
+    )
+)
+
+:OPEN_BROWSER
+if "%DASHBOARD_URL%"=="" set DASHBOARD_URL=http://localhost:5174
+start "" "%DASHBOARD_URL%"
+
 echo.
 echo ✅ Dashboard is starting!
-echo    Frontend: http://localhost:5174
+echo    Frontend: %DASHBOARD_URL%
 echo    Backend API: http://localhost:5173
 echo.
 echo Close the terminal windows to stop the servers.

@@ -355,7 +355,7 @@ class AzureStorageAdapter(StorageAdapter):
             blob_client = self.container_client.get_blob_client(blob_name)
             blob_client.get_blob_properties()
             return True
-        except:
+        except (AzureError, Exception):
             return False
     
     def get_file_info(self, filepath: str) -> Optional[Dict[str, Any]]:
@@ -376,7 +376,7 @@ class AzureStorageAdapter(StorageAdapter):
                 "modified": props.last_modified.isoformat() if props.last_modified else None,
                 "type": Path(blob_name).suffix[1:] if Path(blob_name).suffix else "unknown"
             }
-        except:
+        except (AzureError, Exception):
             return None
     
     def test_connection(self) -> Dict[str, Any]:
@@ -406,6 +406,23 @@ _current_storage_config: Optional[Dict[str, Any]] = None
 _current_adapter: Optional[StorageAdapter] = None
 
 
+def _get_default_log_dir() -> str:
+    """Get the default log directory with fallback logic."""
+    try:
+        from config import LOG_DIR
+        return str(LOG_DIR)
+    except ImportError:
+        # Fallback: discover standard Windsurf log locations
+        home = Path.home()
+        codeium_logs = home / ".codeium" / "windsurf" / "logs"
+        if codeium_logs.parent.exists():
+            return str(codeium_logs)
+        windsurf_logs = home / ".windsurf" / "logs"
+        if windsurf_logs.parent.exists():
+            return str(windsurf_logs)
+        return str(codeium_logs)
+
+
 def get_storage_adapter(config: Optional[Dict[str, Any]] = None) -> StorageAdapter:
     """Get the appropriate storage adapter based on configuration."""
     global _current_storage_config, _current_adapter
@@ -415,16 +432,14 @@ def get_storage_adapter(config: Optional[Dict[str, Any]] = None) -> StorageAdapt
         if _current_adapter is not None:
             return _current_adapter
         # Default to local storage
-        from config import LOG_DIR
-        return LocalStorageAdapter(str(LOG_DIR))
+        return LocalStorageAdapter(_get_default_log_dir())
     
     storage_type = config.get('type', 'local')
     
     if storage_type == 'local':
         path = config.get('path', '')
         if not path:
-            from config import LOG_DIR
-            path = str(LOG_DIR)
+            path = _get_default_log_dir()
         adapter = LocalStorageAdapter(path)
     
     elif storage_type == 's3':

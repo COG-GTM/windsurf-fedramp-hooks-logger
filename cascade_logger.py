@@ -26,10 +26,45 @@ import socket
 import platform
 import atexit
 import threading
-import fcntl
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Dict, List
+
+# File locking - platform-specific
+if platform.system() == 'Windows':
+    import msvcrt
+    
+    def lock_file(f):
+        """Acquire exclusive lock on file (Windows)."""
+        # Use LK_LOCK for blocking behavior consistent with Unix fcntl.LOCK_EX
+        # Retry with small delay if lock fails (up to 5 attempts)
+        for attempt in range(5):
+            try:
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                if attempt < 4:
+                    import time
+                    time.sleep(0.1)
+                else:
+                    raise
+    
+    def unlock_file(f):
+        """Release lock on file (Windows)."""
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass  # Ignore unlock errors (file may not be locked)
+else:
+    import fcntl
+    
+    def lock_file(f):
+        """Acquire exclusive lock on file (Unix)."""
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+    
+    def unlock_file(f):
+        """Release lock on file (Unix)."""
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 # Configuration - self-contained, no external dependencies
 def get_log_dir() -> Path:
@@ -40,6 +75,9 @@ def get_log_dir() -> Path:
     1. WINDSURF_LOG_DIR environment variable
     2. ~/.codeium/windsurf/logs (primary Windsurf location)
     3. ~/.windsurf/logs (fallback)
+    
+    Note: This function returns the path but does not create it.
+    The directory will be created on first write by write_logs().
     """
     env_dir = os.getenv("WINDSURF_LOG_DIR")
     if env_dir:
@@ -52,12 +90,17 @@ def get_log_dir() -> Path:
     if codeium_logs.parent.exists():
         return codeium_logs
     
-    # Fallback location
+    # Fallback location  
     windsurf_logs = home / ".windsurf" / "logs"
     if windsurf_logs.parent.exists():
         return windsurf_logs
     
-    # Default to primary location
+    # For fresh installs: check if .codeium parent exists
+    codeium_parent = home / ".codeium"
+    if codeium_parent.exists():
+        return codeium_logs
+    
+    # Default to primary location (parent dirs will be created on first write)
     return codeium_logs
 
 LOG_DIR = get_log_dir()
@@ -147,11 +190,11 @@ class BufferedLogWriter:
         try:
             with open(filepath, 'a', encoding='utf-8') as f:
                 # Acquire exclusive lock
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                lock_file(f)
                 try:
                     f.write(''.join(self.buffers[filepath]))
                 finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    unlock_file(f)
             self.buffers[filepath] = []
         except (IOError, OSError) as e:
             # Log error but don't crash
@@ -499,11 +542,11 @@ def write_human_readable(log_entry: dict) -> None:
     # Write with file locking
     try:
         with open(summary_log, "a", encoding='utf-8') as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            lock_file(f)
             try:
                 f.write('\n'.join(lines) + '\n')
             finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                unlock_file(f)
     except (IOError, OSError):
         pass  # Silently fail for summary log
 
@@ -542,11 +585,11 @@ def log_error(message: str) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     try:
         with open(error_log, "a", encoding='utf-8') as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            lock_file(f)
             try:
                 f.write(f"[{datetime.now().isoformat()}] {message}\n")
             finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                unlock_file(f)
     except (IOError, OSError):
         pass  # Can't log the error, just continue
 

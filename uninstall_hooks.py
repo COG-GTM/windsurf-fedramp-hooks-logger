@@ -57,6 +57,8 @@ def uninstall_hooks(dry_run: bool = False) -> str:
             messages.append(f"Would remove backup file: {backup_path}")
             return
 
+        # Ensure destination directory exists
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(backup_path, dest_path)
         backup_path.unlink()
         messages.append(f"Restored {description} from backup to {dest_path}")
@@ -286,34 +288,35 @@ Examples:
                 return False
             print("Please enter y or n.")
 
-    any_delete_flag = args.delete_logs or args.delete_repo or args.delete_all
+    any_delete_flag = args.delete_logs or args.delete_repo
     if not args.force and not any_delete_flag:
         if not sys.stdin.isatty():
-            print(
-                "Non-interactive mode detected. Please pass explicit options like --delete-logs, --delete-repo, or --delete-all.",
-                file=sys.stderr,
+            # Non-interactive mode: proceed with hooks-only uninstall (safe default)
+            # User must pass --delete-logs/--delete-repo/--delete-all explicitly for those
+            print("Non-interactive mode detected. Proceeding with hooks uninstall only.")
+            print("Use --delete-logs, --delete-repo, or --delete-all for additional cleanup.")
+            args.force = True  # Skip confirmation since we're doing safe default
+        else:
+            # Interactive mode: prompt for optional cleanup
+            print("Optional cleanup (hooks uninstall will still run):")
+            print()
+
+            args.delete_logs = prompt_yes_no(
+                f"Delete Windsurf logs at {get_windsurf_logs_dir()}? This permanently removes your audit history.",
+                default=False,
             )
-            return 2
+            args.delete_repo = prompt_yes_no(
+                f"Delete this local repository at {get_repo_dir()}? This removes the source code/dashboard and cannot be undone.",
+                default=False,
+            )
 
-        print("Optional cleanup (hooks uninstall will still run):")
-        print()
+            if args.delete_repo:
+                confirm = input("Type DELETE to confirm repository deletion: ").strip()
+                if confirm != "DELETE":
+                    print("Repository deletion not confirmed; will not delete repo.")
+                    args.delete_repo = False
 
-        args.delete_logs = prompt_yes_no(
-            f"Delete Windsurf logs at {get_windsurf_logs_dir()}? This permanently removes your audit history.",
-            default=False,
-        )
-        args.delete_repo = prompt_yes_no(
-            f"Delete this local repository at {get_repo_dir()}? This removes the source code/dashboard and cannot be undone.",
-            default=False,
-        )
-
-        if args.delete_repo:
-            confirm = input("Type DELETE to confirm repository deletion: ").strip()
-            if confirm != "DELETE":
-                print("Repository deletion not confirmed; will not delete repo.")
-                args.delete_repo = False
-
-        print()
+            print()
     
     if args.dry_run:
         print("Dry run - no changes made:")

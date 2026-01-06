@@ -7,11 +7,7 @@ from pathlib import Path
 
 # Import path discovery utilities
 try:
-    from windsurf_paths import (
-        get_default_log_output_dir,
-        get_windsurf_data_dir,
-        read_windsurf_user_settings,
-    )
+    from windsurf_paths import get_default_log_output_dir
     _has_windsurf_paths = True
 except ImportError:
     _has_windsurf_paths = False
@@ -27,7 +23,7 @@ def get_default_log_dir():
     Priority:
     1. WINDSURF_LOG_DIR environment variable
     2. Windsurf data directory logs (discovered dynamically)
-    3. Falls back to ./logs relative to this script
+    3. Falls back to standard Windsurf locations
     """
     # Check environment variable first
     env_dir = os.getenv("WINDSURF_LOG_DIR")
@@ -41,15 +37,20 @@ def get_default_log_dir():
     # Fallback: discover standard locations
     home = Path.home()
     
-    # Primary Windsurf data location
+    # Primary Windsurf data location (check parent exists, logs dir will be created)
     codeium_logs = home / ".codeium" / "windsurf" / "logs"
-    if codeium_logs.exists():
+    if codeium_logs.parent.exists():
         return codeium_logs
     
     # Secondary location
     windsurf_logs = home / ".windsurf" / "logs"
-    if windsurf_logs.exists():
+    if windsurf_logs.parent.exists():
         return windsurf_logs
+    
+    # For fresh installs: check if .codeium parent exists
+    codeium_parent = home / ".codeium"
+    if codeium_parent.exists():
+        return codeium_logs
     
     # Default to primary location (will be created when needed)
     return codeium_logs

@@ -23,6 +23,10 @@ def get_windsurf_data_dir() -> Path:
     
     Primary location: ~/.codeium/windsurf/
     Fallback: ~/.windsurf/
+    
+    For fresh installs where neither exists, we check if the Windsurf
+    application support directory exists to confirm Windsurf is installed,
+    then default to the primary location.
     """
     home = get_home_dir()
     
@@ -36,7 +40,19 @@ def get_windsurf_data_dir() -> Path:
     if windsurf_dir.exists():
         return windsurf_dir
     
-    # Default to primary (will be created if needed)
+    # For fresh installs: check if parent .codeium exists (partial install)
+    # or if Windsurf app support exists (Windsurf is installed but no hooks yet)
+    codeium_parent = home / ".codeium"
+    if codeium_parent.exists():
+        return codeium_dir
+    
+    # Check if Windsurf application is installed by checking app support dir
+    app_support = get_windsurf_app_support_dir()
+    if app_support.exists():
+        # Windsurf is installed, use primary data location
+        return codeium_dir
+    
+    # Default to primary location (will be created if needed)
     return codeium_dir
 
 
@@ -153,16 +169,17 @@ def get_default_log_output_dir() -> Path:
     
     Priority:
     1. WINDSURF_LOG_DIR environment variable
-    2. ~/.codeium/windsurf/logs (if exists)
-    3. ~/.windsurf/logs (if exists)
-    4. Falls back to ~/.codeium/windsurf/logs
+    2. Windsurf data directory / logs (uses get_windsurf_data_dir() discovery)
+    
+    Note: The logs directory itself may not exist yet - it will be created
+    on first write. We check parent directory existence in get_windsurf_data_dir().
     """
     # Check environment variable first
     env_dir = os.environ.get("WINDSURF_LOG_DIR")
     if env_dir:
         return Path(env_dir).expanduser()
     
-    # Check standard Windsurf locations
+    # Use standard Windsurf data location (already handles path discovery)
     data_dir = get_windsurf_data_dir()
     logs_dir = data_dir / "logs"
     
@@ -176,10 +193,20 @@ def generate_hooks_config() -> Dict[str, Any]:
     Uses the installed logger path (in Windsurf data directory) so the hooks
     work independently of the original repo location.
     """
+    import sys
     script_path = get_installed_logger_path()
     
+    # Use the Python executable that's running this script to ensure compatibility
+    # On Windows, 'python3' may not exist; 'python' is typically used
+    if platform.system() == 'Windows':
+        python_cmd = 'python'
+    else:
+        python_cmd = 'python3'
+    
+    # Quote the script path to handle paths with spaces
+    # Use double quotes which work on both Windows and Unix
     hook_entry = {
-        "command": f"python3 {script_path}",
+        "command": f'{python_cmd} "{script_path}"',
         "timeout_ms": 5000
     }
     
@@ -343,7 +370,6 @@ def get_system_paths_info() -> Dict[str, str]:
 
 if __name__ == "__main__":
     # When run directly, show discovered paths
-    import json
     print("Windsurf Paths Discovery")
     print("=" * 50)
     for key, value in get_system_paths_info().items():

@@ -34,7 +34,21 @@ try:
     )
 except ImportError:
     # Fallback defaults if config not available
-    LOG_DIR = Path(__file__).parent.parent.parent / "logs"
+    # Use standard Windsurf log location, not repo-relative path
+    def _get_fallback_log_dir():
+        home = Path.home()
+        # Primary Windsurf data location
+        codeium_logs = home / ".codeium" / "windsurf" / "logs"
+        if codeium_logs.parent.exists():
+            return codeium_logs
+        # Fallback location
+        windsurf_logs = home / ".windsurf" / "logs"
+        if windsurf_logs.parent.exists():
+            return windsurf_logs
+        # Default to primary
+        return codeium_logs
+    
+    LOG_DIR = _get_fallback_log_dir()
     FLASK_HOST = "0.0.0.0"
     FLASK_PORT = 5173
     FLASK_DEBUG = False
@@ -160,10 +174,16 @@ def validate_path(path: str) -> bool:
     """Validate that a path is safe and within allowed directories."""
     try:
         resolved = Path(path).resolve()
-        return any(
-            str(resolved).startswith(str(Path(allowed).resolve()))
-            for allowed in ALLOWED_BROWSE_PATHS
-        )
+        # Ensure the resolved path is actually within allowed directories
+        # by checking that the allowed path is a parent (not just a prefix string)
+        for allowed in ALLOWED_BROWSE_PATHS:
+            allowed_resolved = Path(allowed).resolve()
+            try:
+                resolved.relative_to(allowed_resolved)
+                return True
+            except ValueError:
+                continue
+        return False
     except (ValueError, OSError):
         return False
 
@@ -563,7 +583,7 @@ def get_log_data():
                 else:
                     # Use first available file
                     filepaths = [files[0].get('s3_key') or files[0].get('blob_name') or files[0]['path']] if files else []
-            except:
+            except Exception:
                 filepaths = []
         else:
             filepaths = [os.path.join(DEFAULT_LOG_DIR, 'all_events.jsonl')]
@@ -1197,11 +1217,15 @@ def browse_directories():
         for item in os.listdir(path):
             item_path = os.path.join(path, item)
             if os.path.isdir(item_path) and not item.startswith('.'):
-                has_logs = any(
-                    f.endswith('.jsonl') or f.endswith('.log')
-                    for f in os.listdir(item_path)
-                    if os.path.isfile(os.path.join(item_path, f))
-                )
+                has_logs = False
+                try:
+                    has_logs = any(
+                        f.endswith('.jsonl') or f.endswith('.log')
+                        for f in os.listdir(item_path)
+                        if os.path.isfile(os.path.join(item_path, f))
+                    )
+                except (PermissionError, OSError):
+                    pass  # Can't read directory, assume no logs
                 items.append({
                     "name": item,
                     "path": item_path,
