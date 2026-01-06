@@ -4,12 +4,18 @@ Uninstall Windsurf Logger hooks.
 
 This script removes the hooks.json configuration and logger script
 installed by install_hooks.py, reverting to the pre-install state.
+
+Optional deletion targets:
+- --delete-logs: Remove all log files
+- --delete-repo: Remove the local repository
+- --delete-all: Remove everything (hooks, logs, and repo)
 """
 
 import sys
 import argparse
 import json
 import shutil
+from pathlib import Path
 from windsurf_paths import (
     get_windsurf_hooks_file,
     get_installed_logger_path,
@@ -18,7 +24,13 @@ from windsurf_paths import (
     get_logger_backup_path,
     get_install_manifest_path,
     generate_hooks_config,
+    get_windsurf_logs_dir,
 )
+
+
+def get_repo_dir() -> Path:
+    """Get the local repository directory (where this script lives)."""
+    return Path(__file__).parent.resolve()
 
 
 def uninstall_hooks(dry_run: bool = False) -> str:
@@ -125,9 +137,94 @@ def uninstall_hooks(dry_run: bool = False) -> str:
     return "\n".join(messages)
 
 
+def delete_logs(dry_run: bool = False) -> str:
+    """
+    Delete all log files from the Windsurf logs directory.
+    
+    Args:
+        dry_run: If True, returns what would be done without actually deleting
+    
+    Returns:
+        Status message describing what was done
+    """
+    messages = []
+    logs_dir = get_windsurf_logs_dir()
+    
+    if not logs_dir.exists():
+        messages.append(f"Logs directory not found: {logs_dir}")
+        return "\n".join(messages)
+    
+    # Count files and calculate size
+    log_files = list(logs_dir.rglob("*"))
+    file_count = sum(1 for f in log_files if f.is_file())
+    total_size = sum(f.stat().st_size for f in log_files if f.is_file())
+    size_mb = total_size / (1024 * 1024)
+    
+    if dry_run:
+        messages.append(f"Would delete logs directory: {logs_dir}")
+        messages.append(f"  Contains {file_count} files ({size_mb:.2f} MB)")
+        return "\n".join(messages)
+    
+    try:
+        shutil.rmtree(logs_dir)
+        messages.append(f"Deleted logs directory: {logs_dir}")
+        messages.append(f"  Removed {file_count} files ({size_mb:.2f} MB)")
+    except OSError as e:
+        messages.append(f"Failed to delete logs directory ({logs_dir}): {e}")
+    
+    return "\n".join(messages)
+
+
+def delete_repo(dry_run: bool = False) -> str:
+    """
+    Delete the local repository directory.
+    
+    Args:
+        dry_run: If True, returns what would be done without actually deleting
+    
+    Returns:
+        Status message describing what was done
+    """
+    messages = []
+    repo_dir = get_repo_dir()
+    
+    if not repo_dir.exists():
+        messages.append(f"Repository directory not found: {repo_dir}")
+        return "\n".join(messages)
+    
+    # Count files and calculate size
+    all_files = list(repo_dir.rglob("*"))
+    file_count = sum(1 for f in all_files if f.is_file())
+    total_size = sum(f.stat().st_size for f in all_files if f.is_file())
+    size_mb = total_size / (1024 * 1024)
+    
+    if dry_run:
+        messages.append(f"Would delete repository directory: {repo_dir}")
+        messages.append(f"  Contains {file_count} files ({size_mb:.2f} MB)")
+        return "\n".join(messages)
+    
+    try:
+        shutil.rmtree(repo_dir)
+        messages.append(f"Deleted repository directory: {repo_dir}")
+        messages.append(f"  Removed {file_count} files ({size_mb:.2f} MB)")
+    except OSError as e:
+        messages.append(f"Failed to delete repository directory ({repo_dir}): {e}")
+    
+    return "\n".join(messages)
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Uninstall Windsurf Logger hooks configuration"
+        description="Uninstall Windsurf Logger hooks configuration",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python3 uninstall_hooks.py                    # Uninstall hooks only
+  python3 uninstall_hooks.py --delete-logs      # Uninstall hooks and delete logs
+  python3 uninstall_hooks.py --delete-repo      # Uninstall hooks and delete local repo
+  python3 uninstall_hooks.py --delete-all       # Remove everything
+  python3 uninstall_hooks.py --dry-run --delete-all  # Preview full removal
+"""
     )
     parser.add_argument(
         "--dry-run",
@@ -145,37 +242,91 @@ def main():
         action="store_true",
         help="Skip confirmation prompt"
     )
+    parser.add_argument(
+        "--delete-logs",
+        action="store_true",
+        help="Also delete all log files in the Windsurf logs directory"
+    )
+    parser.add_argument(
+        "--delete-repo",
+        action="store_true",
+        help="Also delete the local repository (source code)"
+    )
+    parser.add_argument(
+        "--delete-all",
+        action="store_true",
+        help="Delete everything: hooks, logs, and local repository"
+    )
     
     args = parser.parse_args()
+    
+    # --delete-all implies both --delete-logs and --delete-repo
+    if args.delete_all:
+        args.delete_logs = True
+        args.delete_repo = True
     
     if args.show_paths:
         print("Discovered Windsurf Paths:")
         print("=" * 50)
         for key, value in get_system_paths_info().items():
             print(f"  {key}: {value}")
+        print(f"  logs_dir: {get_windsurf_logs_dir()}")
+        print(f"  repo_dir: {get_repo_dir()}")
         print()
     
     if args.dry_run:
-        result = uninstall_hooks(dry_run=True)
         print("Dry run - no changes made:")
+        print()
+        
+        print("=== Hooks Uninstall ===")
+        result = uninstall_hooks(dry_run=True)
         print(result)
+        print()
+        
+        if args.delete_logs:
+            print("=== Delete Logs ===")
+            result = delete_logs(dry_run=True)
+            print(result)
+            print()
+        
+        if args.delete_repo:
+            print("=== Delete Repository ===")
+            result = delete_repo(dry_run=True)
+            print(result)
+            print()
+        
         return 0
+    
+    # Build list of what will be affected for confirmation
+    hooks_file = get_windsurf_hooks_file()
+    logger_file = get_installed_logger_path()
+    hooks_backup_file = get_hooks_backup_file()
+    logger_backup_file = get_logger_backup_path()
+    manifest_file = get_install_manifest_path()
+    logs_dir = get_windsurf_logs_dir()
+    repo_dir = get_repo_dir()
     
     # Confirm before uninstalling (unless --force)
     if not args.force:
-        hooks_file = get_windsurf_hooks_file()
-        logger_file = get_installed_logger_path()
-        hooks_backup_file = get_hooks_backup_file()
-        logger_backup_file = get_logger_backup_path()
-        manifest_file = get_install_manifest_path()
+        print("This will perform the following actions:")
+        print()
+        print("  [Hooks - always removed]")
+        print(f"    - {hooks_file}")
+        print(f"    - {logger_file}")
+        print(f"    - {hooks_backup_file} (if present)")
+        print(f"    - {logger_backup_file} (if present)")
+        print(f"    - {manifest_file} (if present)")
         
-        print("This will revert Windsurf to the pre-install state (logs are preserved).")
-        print("Files that may be modified:")
-        print(f"  - {hooks_file}")
-        print(f"  - {logger_file}")
-        print(f"  - {hooks_backup_file} (if present)")
-        print(f"  - {logger_backup_file} (if present)")
-        print(f"  - {manifest_file} (if present)")
+        if args.delete_logs:
+            print()
+            print("  [Logs - will be DELETED]")
+            print(f"    - {logs_dir}/ (entire directory)")
+        
+        if args.delete_repo:
+            print()
+            print("  [Repository - will be DELETED]")
+            print(f"    - {repo_dir}/ (entire directory)")
+        
         print()
         
         try:
@@ -189,13 +340,28 @@ def main():
     
     # Perform the actual uninstallation
     try:
+        print("=== Uninstalling Hooks ===")
         result = uninstall_hooks(dry_run=False)
         print(result)
-        print("\nHooks uninstalled successfully!")
+        print()
+        
+        if args.delete_logs:
+            print("=== Deleting Logs ===")
+            result = delete_logs(dry_run=False)
+            print(result)
+            print()
+        
+        if args.delete_repo:
+            print("=== Deleting Repository ===")
+            result = delete_repo(dry_run=False)
+            print(result)
+            print()
+        
+        print("Uninstall completed successfully!")
         print("Restart Windsurf for the changes to take effect.")
         return 0
     except Exception as e:
-        print(f"Error uninstalling hooks: {e}", file=sys.stderr)
+        print(f"Error during uninstall: {e}", file=sys.stderr)
         return 1
 
 
