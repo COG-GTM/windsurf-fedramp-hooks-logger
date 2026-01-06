@@ -118,11 +118,21 @@ def get_setting(key: str, default: Any = None) -> Any:
 
 def get_logger_script_path() -> Path:
     """
-    Get the path to the cascade_logger.py script.
+    Get the path to the cascade_logger.py script in the source repo.
     
     This returns the path relative to where this module is installed.
     """
     return Path(__file__).parent.resolve() / "cascade_logger.py"
+
+
+def get_installed_logger_path() -> Path:
+    """
+    Get the path where the logger script will be installed.
+    
+    The logger is copied to the Windsurf data directory so it works
+    independently of the original repo location.
+    """
+    return get_windsurf_data_dir() / "cascade_logger.py"
 
 
 def get_default_log_output_dir() -> Path:
@@ -151,9 +161,10 @@ def generate_hooks_config() -> Dict[str, Any]:
     """
     Generate a hooks.json configuration with the correct paths for the current system.
     
-    This can be used to create or update the hooks.json file.
+    Uses the installed logger path (in Windsurf data directory) so the hooks
+    work independently of the original repo location.
     """
-    script_path = get_logger_script_path()
+    script_path = get_installed_logger_path()
     
     hook_entry = {
         "command": f"python3 {script_path}",
@@ -175,9 +186,41 @@ def generate_hooks_config() -> Dict[str, Any]:
     }
 
 
+def install_logger_script(dry_run: bool = False) -> str:
+    """
+    Copy the logger script to the Windsurf data directory.
+    
+    This makes the logger work independently of the original repo location.
+    
+    Args:
+        dry_run: If True, returns what would be done without actually copying
+    
+    Returns:
+        Status message describing what was done
+    """
+    import shutil
+    
+    source_path = get_logger_script_path()
+    dest_path = get_installed_logger_path()
+    
+    if dry_run:
+        return f"Would copy {source_path} to {dest_path}"
+    
+    # Ensure directory exists
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Copy the logger script
+    shutil.copy2(source_path, dest_path)
+    
+    return f"Logger script installed to {dest_path}"
+
+
 def install_hooks(dry_run: bool = False) -> str:
     """
-    Install the hooks configuration to Windsurf.
+    Install the hooks configuration and logger script to Windsurf.
+    
+    This copies the logger script to the Windsurf data directory and
+    creates the hooks.json configuration pointing to it.
     
     Args:
         dry_run: If True, returns what would be written without actually writing
@@ -185,12 +228,20 @@ def install_hooks(dry_run: bool = False) -> str:
     Returns:
         Status message describing what was done
     """
+    messages = []
+    
+    # First, install the logger script
+    logger_result = install_logger_script(dry_run=dry_run)
+    messages.append(logger_result)
+    
+    # Then, install the hooks config
     hooks_file = get_windsurf_hooks_file()
     config = generate_hooks_config()
     config_json = json.dumps(config, indent=2)
     
     if dry_run:
-        return f"Would write to {hooks_file}:\n{config_json}"
+        messages.append(f"Would write to {hooks_file}:\n{config_json}")
+        return "\n".join(messages)
     
     # Ensure directory exists
     hooks_file.parent.mkdir(parents=True, exist_ok=True)
@@ -199,7 +250,8 @@ def install_hooks(dry_run: bool = False) -> str:
     with open(hooks_file, 'w', encoding='utf-8') as f:
         f.write(config_json)
     
-    return f"Hooks installed to {hooks_file}"
+    messages.append(f"Hooks installed to {hooks_file}")
+    return "\n".join(messages)
 
 
 def get_system_paths_info() -> Dict[str, str]:
@@ -213,7 +265,8 @@ def get_system_paths_info() -> Dict[str, str]:
         "windsurf_hooks_file": str(get_windsurf_hooks_file()),
         "windsurf_user_settings_file": str(get_windsurf_user_settings_file()),
         "windsurf_logs_dir": str(get_windsurf_logs_dir()),
-        "logger_script_path": str(get_logger_script_path()),
+        "logger_script_path_source": str(get_logger_script_path()),
+        "logger_script_path_installed": str(get_installed_logger_path()),
         "default_log_output_dir": str(get_default_log_output_dir()),
     }
 

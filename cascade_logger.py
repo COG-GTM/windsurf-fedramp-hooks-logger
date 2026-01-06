@@ -31,17 +31,39 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 
-# Try to import config, fall back to defaults
-try:
-    from config import LOG_DIR, MAX_CONTENT_LENGTH, LOG_BUFFER_SIZE, LOG_FLUSH_INTERVAL
-except ImportError:
-    LOG_DIR = Path(os.getenv(
-        "WINDSURF_LOG_DIR",
-        str(Path(__file__).parent / "logs")
-    ))
-    MAX_CONTENT_LENGTH = int(os.getenv("WINDSURF_MAX_CONTENT_LENGTH", "100000"))
-    LOG_BUFFER_SIZE = int(os.getenv("WINDSURF_LOG_BUFFER_SIZE", "10"))
-    LOG_FLUSH_INTERVAL = float(os.getenv("WINDSURF_LOG_FLUSH_INTERVAL", "5.0"))
+# Configuration - self-contained, no external dependencies
+def get_log_dir() -> Path:
+    """
+    Discover the log directory.
+    
+    Priority:
+    1. WINDSURF_LOG_DIR environment variable
+    2. ~/.codeium/windsurf/logs (primary Windsurf location)
+    3. ~/.windsurf/logs (fallback)
+    """
+    env_dir = os.getenv("WINDSURF_LOG_DIR")
+    if env_dir:
+        return Path(env_dir).expanduser()
+    
+    home = Path.home()
+    
+    # Primary Windsurf data location
+    codeium_logs = home / ".codeium" / "windsurf" / "logs"
+    if codeium_logs.parent.exists():
+        return codeium_logs
+    
+    # Fallback location
+    windsurf_logs = home / ".windsurf" / "logs"
+    if windsurf_logs.parent.exists():
+        return windsurf_logs
+    
+    # Default to primary location
+    return codeium_logs
+
+LOG_DIR = get_log_dir()
+MAX_CONTENT_LENGTH = int(os.getenv("WINDSURF_MAX_CONTENT_LENGTH", "100000"))
+LOG_BUFFER_SIZE = int(os.getenv("WINDSURF_LOG_BUFFER_SIZE", "10"))
+LOG_FLUSH_INTERVAL = float(os.getenv("WINDSURF_LOG_FLUSH_INTERVAL", "5.0"))
 
 # Ensure LOG_DIR is a Path object
 if isinstance(LOG_DIR, str):
