@@ -10,7 +10,22 @@ Comprehensive logging for all Windsurf Cascade hook events with a dashboard for 
 python3 install_hooks.py
 ```
 
-### 2. Launch Dashboard
+### 2. Uninstall Hooks
+
+To completely remove the logger and revert Windsurf to the pre-install state (logs are preserved):
+
+```bash
+python3 uninstall_hooks.py
+```
+
+This will restore any previous `hooks.json` that existed before installation.
+
+Options:
+- `--dry-run` - Preview what will be removed without making changes
+- `--force` or `-f` - Skip confirmation prompt
+- `--show-paths` - Display all discovered Windsurf paths
+
+### 3. Launch Dashboard
 
 **Option A: Cross-Platform Desktop Launcher (Recommended)**
 ```bash
@@ -59,7 +74,7 @@ Open http://localhost:5174 in your browser.
 
 Run `python3 create_launcher.py --all` to generate launchers for all platforms (useful for distribution).
 
-### 3. Stop Dashboard
+### 4. Stop Dashboard
 
 - **Desktop**: Press `Ctrl+C` in the terminal window
 - **Terminal launcher**: Press `Ctrl+C` in the terminal
@@ -89,6 +104,28 @@ cp hooks.json ~/.codeium/windsurf/hooks.json
 python3 install_hooks.py --show-paths
 python3 install_hooks.py --print-config
 ```
+
+### Manual Uninstallation
+
+If the automatic uninstaller fails, you can manually remove the installed files (logs are preserved):
+
+```bash
+# Remove installed hooks and logger
+rm ~/.codeium/windsurf/hooks.json
+rm ~/.codeium/windsurf/cascade_logger.py
+
+# Remove install manifest and any backups
+rm ~/.codeium/windsurf/windsurf-logger-install-manifest.json
+rm ~/.codeium/windsurf/hooks.json.windsurf-logger.bak
+rm ~/.codeium/windsurf/cascade_logger.py.windsurf-logger.bak
+```
+
+To restore a previous hooks configuration (if backup exists):
+```bash
+mv ~/.codeium/windsurf/hooks.json.windsurf-logger.bak ~/.codeium/windsurf/hooks.json
+```
+
+Then restart Windsurf.
 
 ## Captured Events
 

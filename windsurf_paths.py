@@ -135,6 +135,18 @@ def get_installed_logger_path() -> Path:
     return get_windsurf_data_dir() / "cascade_logger.py"
 
 
+def get_hooks_backup_file() -> Path:
+    return get_windsurf_hooks_dir() / "hooks.json.windsurf-logger.bak"
+
+
+def get_logger_backup_path() -> Path:
+    return get_windsurf_data_dir() / "cascade_logger.py.windsurf-logger.bak"
+
+
+def get_install_manifest_path() -> Path:
+    return get_windsurf_data_dir() / "windsurf-logger-install-manifest.json"
+
+
 def get_default_log_output_dir() -> Path:
     """
     Get the default directory for logger output.
@@ -228,28 +240,83 @@ def install_hooks(dry_run: bool = False) -> str:
     Returns:
         Status message describing what was done
     """
+    import shutil
+
     messages = []
-    
+
+    hooks_file = get_windsurf_hooks_file()
+    installed_logger_path = get_installed_logger_path()
+    hooks_backup_file = get_hooks_backup_file()
+    logger_backup_path = get_logger_backup_path()
+    install_manifest_path = get_install_manifest_path()
+
+    had_existing_hooks = hooks_file.exists()
+    had_existing_logger = installed_logger_path.exists()
+
+    if dry_run:
+        if not install_manifest_path.exists():
+            if had_existing_hooks:
+                messages.append(
+                    f"Would back up existing hooks configuration from {hooks_file} to {hooks_backup_file}"
+                )
+            if had_existing_logger:
+                messages.append(
+                    f"Would back up existing logger script from {installed_logger_path} to {logger_backup_path}"
+                )
+            messages.append(f"Would write install manifest to {install_manifest_path}")
+        else:
+            messages.append(
+                f"Install manifest already exists at {install_manifest_path} (would not create backups)"
+            )
+
+        logger_result = install_logger_script(dry_run=True)
+        messages.append(logger_result)
+
+        config = generate_hooks_config()
+        config_json = json.dumps(config, indent=2)
+        messages.append(f"Would write to {hooks_file}:\n{config_json}")
+        return "\n".join(messages)
+
+    if not install_manifest_path.exists():
+        if had_existing_hooks and not hooks_backup_file.exists():
+            hooks_backup_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(hooks_file, hooks_backup_file)
+            messages.append(f"Backed up existing hooks configuration to {hooks_backup_file}")
+
+        if had_existing_logger and not logger_backup_path.exists():
+            logger_backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(installed_logger_path, logger_backup_path)
+            messages.append(f"Backed up existing logger script to {logger_backup_path}")
+
+        install_manifest = {
+            "hooks_file": str(hooks_file),
+            "hooks_backup_file": str(hooks_backup_file),
+            "installed_logger_path": str(installed_logger_path),
+            "logger_backup_path": str(logger_backup_path),
+            "had_existing_hooks": had_existing_hooks,
+            "had_existing_logger": had_existing_logger,
+        }
+
+        install_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(install_manifest_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(install_manifest, indent=2))
+        messages.append(f"Install manifest written to {install_manifest_path}")
+
     # First, install the logger script
     logger_result = install_logger_script(dry_run=dry_run)
     messages.append(logger_result)
-    
+
     # Then, install the hooks config
-    hooks_file = get_windsurf_hooks_file()
     config = generate_hooks_config()
     config_json = json.dumps(config, indent=2)
-    
-    if dry_run:
-        messages.append(f"Would write to {hooks_file}:\n{config_json}")
-        return "\n".join(messages)
-    
+
     # Ensure directory exists
     hooks_file.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Write the config
     with open(hooks_file, 'w', encoding='utf-8') as f:
         f.write(config_json)
-    
+
     messages.append(f"Hooks installed to {hooks_file}")
     return "\n".join(messages)
 
@@ -263,10 +330,13 @@ def get_system_paths_info() -> Dict[str, str]:
         "windsurf_data_dir": str(get_windsurf_data_dir()),
         "windsurf_app_support_dir": str(get_windsurf_app_support_dir()),
         "windsurf_hooks_file": str(get_windsurf_hooks_file()),
+        "windsurf_hooks_backup_file": str(get_hooks_backup_file()),
         "windsurf_user_settings_file": str(get_windsurf_user_settings_file()),
         "windsurf_logs_dir": str(get_windsurf_logs_dir()),
         "logger_script_path_source": str(get_logger_script_path()),
         "logger_script_path_installed": str(get_installed_logger_path()),
+        "logger_script_path_backup": str(get_logger_backup_path()),
+        "install_manifest_path": str(get_install_manifest_path()),
         "default_log_output_dir": str(get_default_log_output_dir()),
     }
 
