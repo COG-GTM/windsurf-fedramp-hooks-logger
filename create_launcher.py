@@ -28,6 +28,26 @@ def get_dashboard_dir() -> Path:
     return get_project_dir() / "dashboard"
 
 
+def cleanup_desktop_shortcuts(current_system: str) -> None:
+    desktop_dir = Path.home() / "Desktop"
+    if not desktop_dir.exists():
+        return
+
+    to_remove = {
+        "Linux": ["Windsurf Logger Dashboard.command", "Windsurf Logger Dashboard.bat"],
+        "Darwin": ["windsurf-logger.desktop", "Windsurf Logger Dashboard.bat"],
+        "Windows": ["windsurf-logger.desktop", "Windsurf Logger Dashboard.command"],
+    }.get(current_system, [])
+
+    for filename in to_remove:
+        path = desktop_dir / filename
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
+
+
 def create_linux_launcher() -> bool:
     """Create .desktop file for Linux."""
     project_dir = get_project_dir()
@@ -186,6 +206,8 @@ def create_launcher():
     print(f"🚀 Creating desktop launcher for Windsurf Logger Dashboard...")
     print(f"   Detected OS: {system}")
     print()
+
+    cleanup_desktop_shortcuts(system)
     
     if system == "Linux":
         success = create_linux_launcher()

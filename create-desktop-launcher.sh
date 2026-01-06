@@ -16,6 +16,16 @@ OS_TYPE="$(uname -s)"
 echo "🚀 Creating desktop launcher for $PROJECT_NAME..."
 echo "   Detected OS: $OS_TYPE"
 
+# Clean up non-applicable desktop shortcut files
+case "$OS_TYPE" in
+    Linux)
+        rm -f "$DESKTOP_DIR/Windsurf Logger Dashboard.command" "$DESKTOP_DIR/Windsurf Logger Dashboard.bat" 2>/dev/null || true
+        ;;
+    Darwin)
+        rm -f "$DESKTOP_DIR/windsurf-logger.desktop" "$DESKTOP_DIR/Windsurf Logger Dashboard.bat" 2>/dev/null || true
+        ;;
+esac
+
 case "$OS_TYPE" in
     Linux)
         # Linux: Create .desktop file
