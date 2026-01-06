@@ -39,7 +39,10 @@ import {
   Users,
   Target,
   Cpu,
-  Database
+  Database,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 
 const API_BASE = '/api';
@@ -106,6 +109,7 @@ function App() {
   const [selectedEntryIndex, setSelectedEntryIndex] = useState(-1);
   const [selectedSession, setSelectedSession] = useState(null);
   const [workflowExpandedGroups, setWorkflowExpandedGroups] = useState(new Set());
+  const [sessionSortOrder, setSessionSortOrder] = useState('newest'); // 'newest' or 'oldest'
   const [allUsers, setAllUsers] = useState([]);
   const [allSessions, setAllSessions] = useState([]);
   const [isDarkMode, setIsDarkMode] = useState(() => {
@@ -679,11 +683,32 @@ function App() {
         {/* Session Selector for Workflow View */}
         {viewMode === 'workflow' && sessions.length > 0 && (
           <div className="p-3 border-b border-ws-border">
-            <p className="text-[10px] uppercase tracking-wider text-ws-text-muted px-3 py-2">Select Session</p>
-            <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar">
-              {/* Show sessions with prompts first */}
+            <div className="flex items-center justify-between px-3 py-2">
+              <p className="text-[10px] uppercase tracking-wider text-ws-text-muted">Select Session</p>
+              <button
+                onClick={() => setSessionSortOrder(prev => prev === 'newest' ? 'oldest' : 'newest')}
+                className="flex items-center gap-1 px-2 py-1 text-[10px] text-ws-text-muted hover:text-ws-text bg-ws-card/50 hover:bg-ws-card rounded border border-ws-border/50 transition-colors"
+                title={`Sort by ${sessionSortOrder === 'newest' ? 'oldest' : 'newest'} first`}
+                aria-label={`Currently sorted ${sessionSortOrder} first. Click to sort ${sessionSortOrder === 'newest' ? 'oldest' : 'newest'} first`}
+              >
+                {sessionSortOrder === 'newest' ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />}
+                <span>{sessionSortOrder === 'newest' ? 'Newest' : 'Oldest'}</span>
+              </button>
+            </div>
+            <div className="space-y-1 max-h-96 overflow-y-auto custom-scrollbar">
+              {/* Sort sessions by chronology based on sessionSortOrder */}
               {sessions
-                .sort((a, b) => (b.categories?.prompt || 0) - (a.categories?.prompt || 0))
+                .sort((a, b) => {
+                  // Parse timestamps for chronological sorting
+                  const getTimestamp = (session) => {
+                    if (session.first_event) return new Date(session.first_event).getTime();
+                    if (session.id === 'no_session') return sessionSortOrder === 'newest' ? Infinity : -Infinity;
+                    return 0;
+                  };
+                  const timeA = getTimestamp(a);
+                  const timeB = getTimestamp(b);
+                  return sessionSortOrder === 'newest' ? timeB - timeA : timeA - timeB;
+                })
                 .slice(0, 20)
                 .map(session => {
                   const hasPrompts = (session.categories?.prompt || 0) > 0;
@@ -984,6 +1009,22 @@ function App() {
             >
               <Filter className="w-4 h-4" aria-hidden="true" />
             </button>
+
+            {/* Chronology Toggle for Workflow View */}
+            {viewMode === 'workflow' && (
+              <button
+                onClick={() => setSessionSortOrder(prev => prev === 'newest' ? 'oldest' : 'newest')}
+                className="flex items-center gap-1.5 px-3 py-2 bg-ws-card border border-ws-border rounded text-sm text-ws-text-secondary hover:text-ws-text hover:border-ws-teal/50 transition-colors"
+                title={`Sort workflow ${sessionSortOrder === 'newest' ? 'oldest' : 'newest'} first`}
+                aria-label={`Currently showing ${sessionSortOrder} first. Click to show ${sessionSortOrder === 'newest' ? 'oldest' : 'newest'} first`}
+              >
+                {sessionSortOrder === 'newest' ? (
+                  <><ArrowDown className="w-4 h-4" /><span>Newest</span></>
+                ) : (
+                  <><ArrowUp className="w-4 h-4" /><span>Oldest</span></>
+                )}
+              </button>
+            )}
           </div>
 
           {/* Advanced Search Panel */}
@@ -995,6 +1036,67 @@ function App() {
                   <X className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
+              
+              {/* Quick Date Presets */}
+              <div className="mb-4">
+                <label className="block text-xs text-ws-text-muted mb-2">Quick Date Range</label>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { label: 'Today', getValue: () => {
+                      const today = new Date();
+                      today.setHours(0, 0, 0, 0);
+                      return { from: today.toISOString().slice(0, 16), to: '' };
+                    }},
+                    { label: 'Last 24h', getValue: () => {
+                      const now = new Date();
+                      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                      return { from: yesterday.toISOString().slice(0, 16), to: '' };
+                    }},
+                    { label: 'Last 7 days', getValue: () => {
+                      const now = new Date();
+                      const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                      return { from: weekAgo.toISOString().slice(0, 16), to: '' };
+                    }},
+                    { label: 'Last 30 days', getValue: () => {
+                      const now = new Date();
+                      const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                      return { from: monthAgo.toISOString().slice(0, 16), to: '' };
+                    }},
+                    { label: 'This week', getValue: () => {
+                      const now = new Date();
+                      const dayOfWeek = now.getDay();
+                      const startOfWeek = new Date(now);
+                      startOfWeek.setDate(now.getDate() - dayOfWeek);
+                      startOfWeek.setHours(0, 0, 0, 0);
+                      return { from: startOfWeek.toISOString().slice(0, 16), to: '' };
+                    }},
+                  ].map(preset => (
+                    <button
+                      key={preset.label}
+                      onClick={() => {
+                        const { from, to } = preset.getValue();
+                        setDateFrom(from);
+                        setDateTo(to);
+                      }}
+                      className="px-3 py-1.5 text-xs bg-ws-bg border border-ws-border rounded hover:border-ws-teal hover:text-ws-teal transition-colors"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                  {(dateFrom || dateTo) && (
+                    <button
+                      onClick={() => {
+                        setDateFrom('');
+                        setDateTo('');
+                      }}
+                      className="px-3 py-1.5 text-xs bg-ws-orange/10 border border-ws-orange/30 text-ws-orange rounded hover:bg-ws-orange/20 transition-colors"
+                    >
+                      Clear Dates
+                    </button>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label htmlFor="filter-session" className="block text-xs text-ws-text-muted mb-1">Session</label>
@@ -1017,24 +1119,108 @@ function App() {
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="filter-date-from" className="block text-xs text-ws-text-muted mb-1">From Date</label>
-                  <input
-                    id="filter-date-from"
-                    type="datetime-local"
-                    value={dateFrom}
-                    onChange={(e) => setDateFrom(e.target.value)}
-                    className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal"
-                  />
+                  <label htmlFor="filter-date-from" className="block text-xs text-ws-text-muted mb-1">
+                    From Date
+                    {dateFrom && <span className="ml-1 text-ws-teal">●</span>}
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="filter-date-from"
+                      type="datetime-local"
+                      value={dateFrom}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (value) {
+                          const selectedDate = new Date(value);
+                          const today = new Date();
+                          today.setHours(0, 0, 0, 0);
+                          const selectedDay = new Date(selectedDate);
+                          selectedDay.setHours(0, 0, 0, 0);
+                          
+                          // If only date was changed (time is 00:00), apply smart defaults
+                          if (selectedDate.getHours() === 0 && selectedDate.getMinutes() === 0) {
+                            if (selectedDay.getTime() === today.getTime()) {
+                              // Today: keep midnight for "from" date (start of day)
+                              setDateFrom(value);
+                            } else {
+                              // Past date: default to midnight
+                              setDateFrom(value);
+                            }
+                          } else {
+                            setDateFrom(value);
+                          }
+                        } else {
+                          setDateFrom(value);
+                        }
+                      }}
+                      className={`w-full px-3 py-2 bg-ws-bg border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal ${dateFrom ? 'border-ws-teal/50' : 'border-ws-border'}`}
+                    />
+                    {dateFrom && (
+                      <button
+                        onClick={() => setDateFrom('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-ws-text-muted hover:text-ws-text rounded"
+                        aria-label="Clear from date"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div>
-                  <label htmlFor="filter-date-to" className="block text-xs text-ws-text-muted mb-1">To Date</label>
-                  <input
-                    id="filter-date-to"
-                    type="datetime-local"
-                    value={dateTo}
-                    onChange={(e) => setDateTo(e.target.value)}
-                    className="w-full px-3 py-2 bg-ws-bg border border-ws-border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal"
-                  />
+                  <label htmlFor="filter-date-to" className="block text-xs text-ws-text-muted mb-1">
+                    To Date
+                    {dateTo && <span className="ml-1 text-ws-teal">●</span>}
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="filter-date-to"
+                      type="datetime-local"
+                      value={dateTo}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        if (value) {
+                          const selectedDate = new Date(value);
+                          const now = new Date();
+                          const today = new Date();
+                          today.setHours(0, 0, 0, 0);
+                          const selectedDay = new Date(selectedDate);
+                          selectedDay.setHours(0, 0, 0, 0);
+                          
+                          // If only date was changed (time is 00:00), apply smart defaults
+                          if (selectedDate.getHours() === 0 && selectedDate.getMinutes() === 0) {
+                            if (selectedDay.getTime() === today.getTime()) {
+                              // Today: default to 1 minute from now
+                              const futureTime = new Date(now.getTime() + 60 * 1000);
+                              const formatted = futureTime.toISOString().slice(0, 16);
+                              setDateTo(formatted);
+                            } else if (selectedDay < today) {
+                              // Past date: default to 23:59
+                              const endOfDay = new Date(selectedDay);
+                              endOfDay.setHours(23, 59, 0, 0);
+                              const formatted = endOfDay.toISOString().slice(0, 16);
+                              setDateTo(formatted);
+                            } else {
+                              setDateTo(value);
+                            }
+                          } else {
+                            setDateTo(value);
+                          }
+                        } else {
+                          setDateTo(value);
+                        }
+                      }}
+                      className={`w-full px-3 py-2 bg-ws-bg border rounded text-ws-text-secondary text-sm focus:outline-none focus:border-ws-teal ${dateTo ? 'border-ws-teal/50' : 'border-ws-border'}`}
+                    />
+                    {dateTo && (
+                      <button
+                        onClick={() => setDateTo('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-ws-text-muted hover:text-ws-text rounded"
+                        aria-label="Clear to date"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-end gap-2">
                   <button
@@ -1094,6 +1280,7 @@ function App() {
               truncateContent={truncateContent}
               copyToClipboard={copyToClipboard}
               onSelectSession={setSelectedSession}
+              sortOrder={sessionSortOrder}
             />
           ) : filteredLogs.length === 0 ? (
             <div className="page-enter">
@@ -1375,8 +1562,23 @@ function WorkflowView({
   formatTimestamp, 
   truncateContent, 
   copyToClipboard,
-  onSelectSession 
+  onSelectSession,
+  sortOrder = 'newest'
 }) {
+  // Sort workflow groups based on sortOrder
+  const sortedWorkflowGroups = useMemo(() => {
+    if (!workflowGroups || workflowGroups.length === 0) return workflowGroups;
+    return [...workflowGroups].sort((a, b) => {
+      const getTimestamp = (group) => {
+        if (group.prompt?.timestamp) return new Date(group.prompt.timestamp).getTime();
+        if (group.events?.[0]?.timestamp) return new Date(group.events[0].timestamp).getTime();
+        return 0;
+      };
+      const timeA = getTimestamp(a);
+      const timeB = getTimestamp(b);
+      return sortOrder === 'newest' ? timeB - timeA : timeA - timeB;
+    });
+  }, [workflowGroups, sortOrder]);
   // Find sessions with prompts for quick access
   const sessionsWithPrompts = sessions.filter(s => s.categories?.prompt > 0);
   
@@ -1493,7 +1695,7 @@ function WorkflowView({
 
       {/* Workflow Groups */}
       <div className="space-y-4 stagger-children">
-        {workflowGroups.map((group, groupIdx) => (
+        {sortedWorkflowGroups.map((group, groupIdx) => (
           <WorkflowGroup
             key={group.id}
             group={group}
