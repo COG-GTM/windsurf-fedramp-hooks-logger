@@ -122,6 +122,47 @@ def test_api_rejects_missing_origin_without_bearer(client_with_auth):
     assert resp.status_code == 401
 
 
+def test_api_allows_sec_fetch_site_same_origin_without_origin_header(client_with_auth):
+    """Modern browsers omit the Origin header on same-origin GET/HEAD fetch
+    requests but always send Sec-Fetch-Site. Without this fallback the
+    bundled SPA's GETs would 401 under WINDSURF_API_KEY. Sec-Fetch-Site is
+    browser-set and a cross-origin page cannot forge ``same-origin`` —
+    Chrome sends ``cross-site`` instead.
+    """
+    client, _ = client_with_auth
+    resp = client.get(
+        "/api/logs/files",
+        headers={"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors"},
+    )
+    assert resp.status_code == 200
+
+
+def test_api_rejects_sec_fetch_site_cross_site(client_with_auth):
+    """A cross-origin attacker page triggers Sec-Fetch-Site: cross-site (the
+    browser sets this based on its own origin computation, JS cannot
+    override it). Such requests must still require a Bearer token.
+    """
+    client, _ = client_with_auth
+    resp = client.get(
+        "/api/logs/files",
+        headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"},
+    )
+    assert resp.status_code == 401
+
+
+def test_api_rejects_sec_fetch_site_same_site(client_with_auth):
+    """``same-site`` means same eTLD+1 but different scheme/port/subdomain.
+    A page on http://localhost:3000 attacking http://localhost:5173 would
+    register as same-site (not same-origin) — must still require Bearer.
+    """
+    client, _ = client_with_auth
+    resp = client.get(
+        "/api/logs/files",
+        headers={"Sec-Fetch-Site": "same-site"},
+    )
+    assert resp.status_code == 401
+
+
 def test_api_is_open_when_key_unset(client_no_auth):
     client, _ = client_no_auth
     resp = client.get("/api/logs/files")

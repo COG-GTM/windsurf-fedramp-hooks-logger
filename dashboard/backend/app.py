@@ -155,17 +155,28 @@ def rate_limit(f):
     return decorated_function
 
 
-def _is_trusted_browser_origin(req) -> bool:
-    """Return True iff the request's ``Origin`` is in ``CORS_ORIGINS``.
+def _is_trusted_browser_request(req) -> bool:
+    """Return True iff the request was issued by the bundled SPA in a browser.
 
-    The dashboard SPA is served by the same Flask app and its browser
-    ``fetch`` calls carry an ``Origin`` header. Browsers set ``Origin``
-    themselves — unlike ``Host``, it cannot be forged by a malicious
-    page (the browser refuses to send a custom ``Origin`` on a
-    cross-origin request).
+    The dashboard SPA is served by the same Flask app. Browser-issued
+    ``fetch`` calls expose **two** server-trustable same-origin signals:
 
-    Crucially, we compare against the **server-controlled** ``CORS_ORIGINS``
-    allow-list rather than ``request.host_url``: ``host_url`` is derived
+    * ``Origin`` header — set by the browser and compared against the
+      server-controlled ``CORS_ORIGINS`` allow-list. Browsers refuse to
+      send a custom ``Origin`` on a cross-origin request, so a malicious
+      page on another origin cannot forge this. Chrome omits ``Origin``
+      for **same-origin GET/HEAD** fetches, which is why the second
+      signal exists.
+    * ``Sec-Fetch-Site: same-origin`` — set by the browser based on its
+      own computed origin (always sent by Chrome 76+/Firefox 90+/Safari
+      16.4+ on ``fetch``). A page on another origin cannot make the
+      browser send ``same-origin`` — the browser sends ``cross-site``
+      instead. We treat ``same-origin`` as equivalent to a matching
+      ``Origin`` for the SPA bypass.
+
+    Crucially, we compare ``Origin`` against the **server-controlled**
+    ``CORS_ORIGINS`` allow-list rather than ``request.host_url``: ``host_url``
+    is derived
     from the client-supplied ``Host`` header and would let an attacker
     set ``Host`` and ``Origin`` to matching attacker-chosen values to
     bypass the Bearer requirement.
@@ -173,12 +184,17 @@ def _is_trusted_browser_origin(req) -> bool:
     Missing ``Origin`` (curl, Postman, server-to-server) is *not* trusted
     — those callers must present a Bearer token.
     """
-    if not _TRUSTED_BROWSER_ORIGINS:
-        return False
     origin = req.headers.get("Origin", "").strip().rstrip("/")
-    if not origin:
-        return False
-    return origin in _TRUSTED_BROWSER_ORIGINS
+    if origin and _TRUSTED_BROWSER_ORIGINS and origin in _TRUSTED_BROWSER_ORIGINS:
+        return True
+    # Same-origin GET/HEAD fetches in modern browsers don't include Origin.
+    # Sec-Fetch-Site is browser-set and a cross-origin page cannot make the
+    # browser send "same-origin" — it will say "cross-site" / "same-site" /
+    # "none" instead. So treat ``same-origin`` as equivalent to a matching
+    # Origin for the SPA bypass purpose.
+    if req.headers.get("Sec-Fetch-Site", "").strip().lower() == "same-origin":
+        return True
+    return False
 
 
 def _bearer_token_ok(req) -> bool:
@@ -209,7 +225,7 @@ def require_auth(f):
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if API_KEY is None or _is_trusted_browser_origin(request) or _bearer_token_ok(request):
+        if API_KEY is None or _is_trusted_browser_request(request) or _bearer_token_ok(request):
             return f(*args, **kwargs)
         return jsonify({"error": "Unauthorized"}), 401
     return decorated_function
@@ -248,7 +264,7 @@ def _enforce_api_auth():
         return None
     if path == "/api/health":
         return None
-    if _is_trusted_browser_origin(request):
+    if _is_trusted_browser_request(request):
         return None
     if _bearer_token_ok(request):
         return None
