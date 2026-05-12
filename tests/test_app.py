@@ -120,6 +120,55 @@ def test_get_log_data_pagination(client_no_auth, populate_log_dir):
     assert len(payload["entries"]) == 1
 
 
+def test_get_log_data_returns_newest_first(client_no_auth, tmp_log_dir):
+    """Streaming pagination must return newest entries on page 1.
+
+    The fixture writes 10 chronological entries; page 1 with page_size=3 must
+    return entries with timestamps 10, 9, 8 (newest-first), not 1, 2, 3.
+    """
+    import json
+    target = tmp_log_dir / "all_events.jsonl"
+    with target.open("w", encoding="utf-8") as f:
+        for i in range(1, 11):
+            f.write(json.dumps({
+                "event_id": f"evt-{i:02d}",
+                "timestamp": f"2025-01-{i:02d}T00:00:00",
+                "trajectory_id": "t",
+                "action": "pre_user_prompt",
+                "category": "prompt",
+                "phase": "pre",
+                "data": {"user_prompt": f"event {i}"},
+            }) + "\n")
+    client, _ = client_no_auth
+    resp = client.get(
+        "/api/logs/data",
+        query_string={"files": str(target), "page": 1, "page_size": 3},
+    )
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["total"] == 10
+    ts = [e["timestamp"] for e in payload["entries"]]
+    assert ts == ["2025-01-10T00:00:00", "2025-01-09T00:00:00", "2025-01-08T00:00:00"], ts
+
+    # Page 2 should be the next three newest.
+    resp = client.get(
+        "/api/logs/data",
+        query_string={"files": str(target), "page": 2, "page_size": 3},
+    )
+    payload = resp.get_json()
+    ts = [e["timestamp"] for e in payload["entries"]]
+    assert ts == ["2025-01-07T00:00:00", "2025-01-06T00:00:00", "2025-01-05T00:00:00"], ts
+
+    # Last page (page 4) should hold the single oldest entry.
+    resp = client.get(
+        "/api/logs/data",
+        query_string={"files": str(target), "page": 4, "page_size": 3},
+    )
+    payload = resp.get_json()
+    ts = [e["timestamp"] for e in payload["entries"]]
+    assert ts == ["2025-01-01T00:00:00"], ts
+
+
 def test_search_logs_finds_matching(client_no_auth, populate_log_dir):
     client, _ = client_no_auth
     resp = client.get(

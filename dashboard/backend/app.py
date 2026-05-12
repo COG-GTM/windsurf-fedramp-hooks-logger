@@ -15,7 +15,7 @@ import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 from functools import wraps
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from typing import Optional, Dict, List, Any, Generator
 
 # Storage adapters (sibling module — same directory).
@@ -696,19 +696,26 @@ def get_log_data():
             })
         source_name = os.path.basename(filepath)
         matched_count = 0
-        results: List[Dict[str, Any]] = []
+        # The API contract is newest-first pagination, but the file is
+        # append-only (oldest-first). To paginate newest-first without
+        # materialising every entry, keep a sliding window of the last
+        # `end_idx` matches seen. After streaming, `total` is known and
+        # the buffer holds exactly the entries needed for this page.
+        buffer: deque = deque(maxlen=end_idx) if end_idx > 0 else deque()
         for entry in stream_jsonl_file(filepath):
             if not _entry_matches_filters(entry, category, user, session, query, date_from, date_to):
                 continue
             matched_count += 1
-            if start_idx < matched_count <= end_idx:
-                entry['source_file'] = source_name
-                results.append(entry)
-            # Note: we still need to count all matches for `total`, so we
-            # don't break early. This is O(N) like the previous version
-            # but avoids holding N entries in memory.
+            entry['source_file'] = source_name
+            buffer.append(entry)
         total = matched_count
-        # File order is append-only; reverse to keep API "newest first" behaviour.
+        # Slice the buffer to the page window then reverse to newest-first.
+        # The buffer holds matches at file-positions [total - len(buffer),
+        # total). The window we want (oldest-first within the page) is
+        # file-positions [max(0, total - end_idx), total - start_idx).
+        # Within the buffer this is index 0 .. len(buffer) - start_idx.
+        take = max(0, len(buffer) - start_idx)
+        results = list(buffer)[:take]
         results.reverse()
         return jsonify({
             "entries": results,
