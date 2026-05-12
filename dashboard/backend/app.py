@@ -37,6 +37,14 @@ from constants import EVENT_CATEGORIES as ACTION_TO_CATEGORY
 app = Flask(__name__, static_folder='../frontend/dist', static_url_path='')
 CORS(app, origins=CORS_ORIGINS)
 
+# Server-controlled allow-list of trusted browser origins. The SPA bundled with
+# this Flask app is served from one of these origins and is allowed to call the
+# API without a Bearer token. We strip whitespace at startup so we can match
+# the request's Origin header exactly. "*" is intentionally *not* treated as
+# trusted — a wildcard CORS policy is for unauthenticated dev, not for
+# bypassing the API key gate.
+_TRUSTED_BROWSER_ORIGINS = {o.strip().rstrip("/") for o in CORS_ORIGINS if o and o.strip() and o.strip() != "*"}
+
 if not API_KEY:
     logging.getLogger(__name__).warning(
         "WINDSURF_API_KEY is not set; /api/ endpoints are unauthenticated. "
@@ -146,26 +154,30 @@ def rate_limit(f):
     return decorated_function
 
 
-def _is_same_origin(req) -> bool:
-    """Return True iff the request originated from this server's own host.
+def _is_trusted_browser_origin(req) -> bool:
+    """Return True iff the request's ``Origin`` is in ``CORS_ORIGINS``.
 
-    The dashboard SPA is served by the same Flask app at the same origin.
-    Browser ``fetch`` calls from the SPA carry an ``Origin`` (and ``Referer``)
-    header that matches the server's host. Such requests are already gated
-    by CORS_ORIGINS for cross-origin callers, so we treat same-origin
-    requests as trusted — the Bearer API key is intended for external API
-    consumers (curl, Postman, scripts), not the SPA.
+    The dashboard SPA is served by the same Flask app and its browser
+    ``fetch`` calls carry an ``Origin`` header. Browsers set ``Origin``
+    themselves — unlike ``Host``, it cannot be forged by a malicious
+    page (the browser refuses to send a custom ``Origin`` on a
+    cross-origin request).
+
+    Crucially, we compare against the **server-controlled** ``CORS_ORIGINS``
+    allow-list rather than ``request.host_url``: ``host_url`` is derived
+    from the client-supplied ``Host`` header and would let an attacker
+    set ``Host`` and ``Origin`` to matching attacker-chosen values to
+    bypass the Bearer requirement.
+
+    Missing ``Origin`` (curl, Postman, server-to-server) is *not* trusted
+    — those callers must present a Bearer token.
     """
-    host_url = (req.host_url or "").rstrip("/")
-    if not host_url:
+    if not _TRUSTED_BROWSER_ORIGINS:
         return False
-    origin = req.headers.get("Origin", "").rstrip("/")
-    if origin:
-        return origin == host_url
-    referer = req.headers.get("Referer", "")
-    if referer:
-        return referer == host_url or referer.startswith(host_url + "/")
-    return False
+    origin = req.headers.get("Origin", "").strip().rstrip("/")
+    if not origin:
+        return False
+    return origin in _TRUSTED_BROWSER_ORIGINS
 
 
 def _bearer_token_ok(req) -> bool:
@@ -182,11 +194,12 @@ def require_auth(f):
     If ``WINDSURF_API_KEY`` is unset the decorator is a no-op (backward
     compatibility for local dev). When ``API_KEY`` is set, requests
     without a valid Bearer token are rejected with 401 — except for
-    same-origin SPA requests, which are gated by CORS_ORIGINS instead.
+    browser ``fetch`` calls whose ``Origin`` header is in the
+    server-controlled ``CORS_ORIGINS`` allow-list.
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if API_KEY is None or _is_same_origin(request) or _bearer_token_ok(request):
+        if API_KEY is None or _is_trusted_browser_origin(request) or _bearer_token_ok(request):
             return f(*args, **kwargs)
         return jsonify({"error": "Unauthorized"}), 401
     return decorated_function
@@ -214,10 +227,9 @@ def _enforce_api_auth():
     """Global gate for /api/ endpoints when an API key is configured.
 
     Health checks are exempt so container orchestrators can probe
-    liveness without credentials. Same-origin requests from the bundled
-    SPA are allowed through because CORS_ORIGINS already enforces who
-    may call the API cross-origin. External API consumers must present
-    a valid Bearer token.
+    liveness without credentials. Browser requests whose ``Origin`` is
+    in ``CORS_ORIGINS`` are trusted (the bundled SPA case). External
+    API consumers must present a valid Bearer token.
     """
     if API_KEY is None:
         return None
@@ -226,7 +238,7 @@ def _enforce_api_auth():
         return None
     if path == "/api/health":
         return None
-    if _is_same_origin(request):
+    if _is_trusted_browser_origin(request):
         return None
     if _bearer_token_ok(request):
         return None
@@ -665,7 +677,11 @@ def get_log_data():
     """
     filepaths = request.args.getlist('files')
     page = max(1, int(request.args.get('page', 1)))
-    page_size = min(MAX_PAGE_SIZE, int(request.args.get('page_size', DEFAULT_PAGE_SIZE)))
+    # Clamp page_size into [1, MAX_PAGE_SIZE]. Without the lower bound, 0 or a
+    # negative value would make end_idx <= 0, which both creates an unbounded
+    # deque in the streaming path and divides by zero when computing
+    # total_pages.
+    page_size = max(1, min(MAX_PAGE_SIZE, int(request.args.get('page_size', DEFAULT_PAGE_SIZE))))
 
     # Filter parameters
     category = request.args.get('category')
@@ -725,7 +741,9 @@ def get_log_data():
         # materialising every entry, keep a sliding window of the last
         # `end_idx` matches seen. After streaming, `total` is known and
         # the buffer holds exactly the entries needed for this page.
-        buffer: deque = deque(maxlen=end_idx) if end_idx > 0 else deque()
+        # end_idx is guaranteed > 0 by the page_size clamp above, but keep the
+        # defensive maxlen=0 fallback so this never becomes an unbounded deque.
+        buffer: deque = deque(maxlen=end_idx if end_idx > 0 else 0)
         for entry in stream_jsonl_file(filepath):
             if not _entry_matches_filters(entry, category, user, session, query, date_from, date_to):
                 continue

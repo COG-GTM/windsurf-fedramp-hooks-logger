@@ -45,6 +45,9 @@ def client_no_auth(monkeypatch, populate_log_dir):
 
 @pytest.fixture()
 def client_with_auth(monkeypatch, populate_log_dir):
+    # Pin CORS_ORIGINS to the SPA dev origin so same-origin tests are
+    # deterministic and don't rely on whatever the user has in their env.
+    monkeypatch.setenv("WINDSURF_CORS_ORIGINS", "http://localhost:5173")
     app_module = _import_app_module(monkeypatch, populate_log_dir, api_key="test-key-123")
     with app_module.app.test_client() as client:
         yield client, app_module
@@ -70,23 +73,53 @@ def test_api_requires_auth_when_key_configured(client_with_auth):
     assert resp.status_code == 200
 
 
-def test_api_allows_same_origin_when_key_configured(client_with_auth):
-    """Browser fetch() from the bundled SPA carries Origin matching the host;
-    those calls should bypass the Bearer requirement because the SPA never
-    learns the key. CORS_ORIGINS still gates cross-origin callers."""
+def test_api_allows_trusted_origin_when_key_configured(client_with_auth):
+    """Browser fetch() from the bundled SPA carries Origin == one of the
+    server-configured CORS_ORIGINS entries; those calls bypass the Bearer
+    requirement because the SPA never learns the key."""
     client, _ = client_with_auth
-    # Flask test client default host_url is http://localhost/.
-    resp = client.get("/api/logs/files", headers={"Origin": "http://localhost"})
-    assert resp.status_code == 200
-    # Foreign Origin should still be rejected.
-    resp = client.get("/api/logs/files", headers={"Origin": "http://evil.example"})
-    assert resp.status_code == 401
-    # Referer fallback for navigations without Origin.
     resp = client.get(
         "/api/logs/files",
-        headers={"Referer": "http://localhost/dashboard"},
+        headers={"Origin": "http://localhost:5173"},
     )
     assert resp.status_code == 200
+
+
+def test_api_rejects_untrusted_origin(client_with_auth):
+    """Origin not in CORS_ORIGINS must still require a Bearer token."""
+    client, _ = client_with_auth
+    resp = client.get(
+        "/api/logs/files",
+        headers={"Origin": "http://evil.example"},
+    )
+    assert resp.status_code == 401
+
+
+def test_api_rejects_host_header_forgery_attack(client_with_auth):
+    """Regression: an attacker setting Host + Origin to matching but
+    untrusted values must NOT bypass auth. The trust check uses the
+    server-controlled CORS_ORIGINS allow-list, not the client-controlled
+    Host header / request.host_url.
+    """
+    client, _ = client_with_auth
+    resp = client.get(
+        "/api/logs/files",
+        headers={
+            "Host": "evil.example:5173",
+            "Origin": "http://evil.example:5173",
+        },
+    )
+    assert resp.status_code == 401
+
+
+def test_api_rejects_missing_origin_without_bearer(client_with_auth):
+    """Non-browser callers (curl/Postman/automation) have no Origin header
+    and must present a Bearer token. They cannot piggyback on the SPA
+    bypass.
+    """
+    client, _ = client_with_auth
+    resp = client.get("/api/logs/files")  # no Origin, no Bearer
+    assert resp.status_code == 401
 
 
 def test_api_is_open_when_key_unset(client_no_auth):
@@ -137,6 +170,27 @@ def test_get_log_data_pagination(client_no_auth, populate_log_dir):
     payload = resp.get_json()
     assert payload["total"] == 3
     assert len(payload["entries"]) == 1
+
+
+def test_get_log_data_clamps_invalid_page_size(client_no_auth, populate_log_dir):
+    """Regression: page_size=0 (or negative) must not crash with
+    ZeroDivisionError nor create an unbounded deque in the streaming
+    fast path. We clamp page_size into [1, MAX_PAGE_SIZE].
+    """
+    client, _ = client_no_auth
+    target = populate_log_dir / "all_events.jsonl"
+    for bad in ("0", "-1", "-1000"):
+        resp = client.get(
+            "/api/logs/data",
+            query_string={"files": str(target), "page": 1, "page_size": bad},
+        )
+        assert resp.status_code == 200, bad
+        payload = resp.get_json()
+        # 3 events in the fixture, clamped to page_size=1 -> 1 entry, 3 pages.
+        assert payload["total"] == 3
+        assert payload["page_size"] == 1
+        assert payload["total_pages"] == 3
+        assert len(payload["entries"]) == 1
 
 
 def test_get_log_data_returns_newest_first(client_no_auth, tmp_log_dir):
