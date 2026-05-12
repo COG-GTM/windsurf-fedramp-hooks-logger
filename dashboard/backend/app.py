@@ -12,6 +12,7 @@ import threading
 import subprocess
 import platform
 import logging
+import hmac
 from pathlib import Path
 from datetime import datetime, timedelta
 from functools import wraps
@@ -181,11 +182,20 @@ def _is_trusted_browser_origin(req) -> bool:
 
 
 def _bearer_token_ok(req) -> bool:
-    """Validate the Bearer token on the request against ``API_KEY``."""
+    """Validate the Bearer token on the request against ``API_KEY``.
+
+    Uses ``hmac.compare_digest`` so the comparison is constant-time with
+    respect to the secret — a plain ``==`` short-circuits on the first
+    differing byte and lets a remote attacker derive the key byte-by-byte
+    via response-latency measurements (STIG / FedRAMP requirement).
+    """
+    if API_KEY is None:
+        return False
     header = req.headers.get("Authorization", "")
     if not header.startswith("Bearer "):
         return False
-    return header[len("Bearer "):].strip() == API_KEY
+    provided = header[len("Bearer "):].strip()
+    return hmac.compare_digest(provided, API_KEY)
 
 
 def require_auth(f):
