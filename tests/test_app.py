@@ -122,19 +122,39 @@ def test_api_rejects_missing_origin_without_bearer(client_with_auth):
     assert resp.status_code == 401
 
 
-def test_api_allows_sec_fetch_site_same_origin_without_origin_header(client_with_auth):
+def test_api_allows_full_sec_fetch_triplet_without_origin_header(client_with_auth):
     """Modern browsers omit the Origin header on same-origin GET/HEAD fetch
-    requests but always send Sec-Fetch-Site. Without this fallback the
-    bundled SPA's GETs would 401 under WINDSURF_API_KEY. Sec-Fetch-Site is
-    browser-set and a cross-origin page cannot forge ``same-origin`` —
-    Chrome sends ``cross-site`` instead.
+    requests but always send the Sec-Fetch-* triplet. The bundled SPA
+    must continue to work under WINDSURF_API_KEY; we accept the request
+    iff ALL three browser-set signals match what a real ``fetch()`` to
+    /api/* produces (site=same-origin, mode=cors, dest in {empty,
+    document}).
     """
     client, _ = client_with_auth
     resp = client.get(
         "/api/logs/files",
-        headers={"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors"},
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty",
+        },
     )
     assert resp.status_code == 200
+
+
+def test_api_rejects_single_sec_fetch_site_header_drive_by(client_with_auth):
+    """Defense in depth: a curl attacker setting only Sec-Fetch-Site:
+    same-origin (without the matching Mode/Dest a real browser fetch
+    produces) must NOT bypass the gate. This was the concern raised by
+    Devin Review on the prior commit — the single-header check was too
+    permissive against drive-by CLI bypasses.
+    """
+    client, _ = client_with_auth
+    resp = client.get(
+        "/api/logs/files",
+        headers={"Sec-Fetch-Site": "same-origin"},  # missing Mode + Dest
+    )
+    assert resp.status_code == 401
 
 
 def test_api_rejects_sec_fetch_site_cross_site(client_with_auth):
@@ -145,7 +165,11 @@ def test_api_rejects_sec_fetch_site_cross_site(client_with_auth):
     client, _ = client_with_auth
     resp = client.get(
         "/api/logs/files",
-        headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"},
+        headers={
+            "Sec-Fetch-Site": "cross-site",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty",
+        },
     )
     assert resp.status_code == 401
 
@@ -158,7 +182,29 @@ def test_api_rejects_sec_fetch_site_same_site(client_with_auth):
     client, _ = client_with_auth
     resp = client.get(
         "/api/logs/files",
-        headers={"Sec-Fetch-Site": "same-site"},
+        headers={
+            "Sec-Fetch-Site": "same-site",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "empty",
+        },
+    )
+    assert resp.status_code == 401
+
+
+def test_api_rejects_sec_fetch_dest_other(client_with_auth):
+    """A real SPA fetch() to /api/* has Sec-Fetch-Dest: empty (or 'document'
+    for navigations). Anything else (image/script/font/iframe/style/...)
+    is not what the SPA produces and indicates a different (possibly
+    attacker-driven) request shape — must require Bearer.
+    """
+    client, _ = client_with_auth
+    resp = client.get(
+        "/api/logs/files",
+        headers={
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Dest": "image",
+        },
     )
     assert resp.status_code == 401
 

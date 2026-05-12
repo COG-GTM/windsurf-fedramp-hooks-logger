@@ -155,44 +155,57 @@ def rate_limit(f):
     return decorated_function
 
 
+# Sec-Fetch-Dest values a real browser fetch() can produce. We accept either
+# 'empty' (default for fetch with no special destination) or 'document' (page
+# navigation). Everything else (image / script / font / iframe etc.) is not
+# what the SPA's ``fetch('/api/...')`` would generate and signals a different
+# (and potentially attacker-driven) request shape.
+_BROWSER_FETCH_DESTS = {"empty", "document"}
+
+
 def _is_trusted_browser_request(req) -> bool:
     """Return True iff the request was issued by the bundled SPA in a browser.
 
-    The dashboard SPA is served by the same Flask app. Browser-issued
-    ``fetch`` calls expose **two** server-trustable same-origin signals:
+    The dashboard SPA is served by the same Flask app. We accept **either**
+    of two browser-set signal sets:
 
-    * ``Origin`` header — set by the browser and compared against the
-      server-controlled ``CORS_ORIGINS`` allow-list. Browsers refuse to
-      send a custom ``Origin`` on a cross-origin request, so a malicious
-      page on another origin cannot forge this. Chrome omits ``Origin``
-      for **same-origin GET/HEAD** fetches, which is why the second
-      signal exists.
-    * ``Sec-Fetch-Site: same-origin`` — set by the browser based on its
-      own computed origin (always sent by Chrome 76+/Firefox 90+/Safari
-      16.4+ on ``fetch``). A page on another origin cannot make the
-      browser send ``same-origin`` — the browser sends ``cross-site``
-      instead. We treat ``same-origin`` as equivalent to a matching
-      ``Origin`` for the SPA bypass.
+    1. ``Origin`` header matches the server-controlled ``CORS_ORIGINS``
+       allow-list. Browsers refuse to send a custom ``Origin`` on a
+       cross-origin request, so a malicious page cannot forge this.
+       Chrome omits ``Origin`` on **same-origin GET/HEAD** fetches, which
+       is why we have a second signal set.
+    2. The full ``Sec-Fetch-*`` triplet a real browser fetch produces:
+       ``Sec-Fetch-Site: same-origin`` **and** ``Sec-Fetch-Mode: cors``
+       **and** ``Sec-Fetch-Dest`` in ``{empty, document}``. These are
+       "forbidden" headers — a cross-origin page running JavaScript cannot
+       set them (the browser overrides JS-supplied values), and the
+       browser computes them itself based on its actual origin context.
+       Requiring all three raises the bar above "single-header curl
+       drive-by" attacks.
 
-    Crucially, we compare ``Origin`` against the **server-controlled**
-    ``CORS_ORIGINS`` allow-list rather than ``request.host_url``: ``host_url``
-    is derived
-    from the client-supplied ``Host`` header and would let an attacker
-    set ``Host`` and ``Origin`` to matching attacker-chosen values to
-    bypass the Bearer requirement.
+    **Security note (be honest about the threat model):** a CLI client
+    that can spoof arbitrary HTTP headers (``curl --header ...``) can
+    spoof both an arbitrary ``Origin`` *and* the ``Sec-Fetch-*`` triplet.
+    The same was true for the previous Origin-only check. The Bearer
+    token (``WINDSURF_API_KEY``) is the real defense against CLI /
+    server-to-server attackers; the Origin / Sec-Fetch checks defend
+    against **browser-context CSRF** (a malicious page running JS in a
+    different origin) where the browser refuses to let the attacking page
+    forge these headers.
 
-    Missing ``Origin`` (curl, Postman, server-to-server) is *not* trusted
-    — those callers must present a Bearer token.
+    Crucially, ``Origin`` is compared against the **server-controlled**
+    ``CORS_ORIGINS`` allow-list, never ``request.host_url`` — the latter
+    is derived from the client-supplied ``Host`` header and would let an
+    attacker set ``Host`` + ``Origin`` to matching attacker-chosen values
+    to bypass the gate.
     """
     origin = req.headers.get("Origin", "").strip().rstrip("/")
     if origin and _TRUSTED_BROWSER_ORIGINS and origin in _TRUSTED_BROWSER_ORIGINS:
         return True
-    # Same-origin GET/HEAD fetches in modern browsers don't include Origin.
-    # Sec-Fetch-Site is browser-set and a cross-origin page cannot make the
-    # browser send "same-origin" — it will say "cross-site" / "same-site" /
-    # "none" instead. So treat ``same-origin`` as equivalent to a matching
-    # Origin for the SPA bypass purpose.
-    if req.headers.get("Sec-Fetch-Site", "").strip().lower() == "same-origin":
+    site = req.headers.get("Sec-Fetch-Site", "").strip().lower()
+    mode = req.headers.get("Sec-Fetch-Mode", "").strip().lower()
+    dest = req.headers.get("Sec-Fetch-Dest", "").strip().lower()
+    if site == "same-origin" and mode == "cors" and dest in _BROWSER_FETCH_DESTS:
         return True
     return False
 
