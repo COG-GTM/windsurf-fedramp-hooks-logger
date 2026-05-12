@@ -17,12 +17,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install Python dependencies
-COPY dashboard/backend/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies from the pinned lock file for reproducible
+# builds. Cloud SDK extras live in requirements-cloud.txt — install them
+# at runtime only if S3 / Azure storage adapters are needed.
+COPY requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.lock
 
 # Copy application files - maintain directory structure for imports
 COPY config.py ./
+COPY constants.py ./
 COPY cascade_logger.py ./
 COPY windsurf_paths.py ./
 COPY dashboard/backend/app.py ./dashboard/backend/
@@ -36,8 +39,16 @@ COPY --from=frontend-builder /app/frontend/dist ./dashboard/frontend/dist
 # Create logs directory
 RUN mkdir -p /app/logs
 
+# Run as non-root for defence-in-depth (FedRAMP / CIS Docker benchmark).
+# Create the user AFTER all files are copied and chown the workdir.
+RUN useradd --create-home --shell /bin/bash appuser && chown -R appuser:appuser /app
+USER appuser
+
 # Environment variables
 ENV WINDSURF_LOG_DIR=/app/logs
+# FLASK_HOST=0.0.0.0 is required inside the container so the port is
+# reachable from outside; the application default (config.py) is the
+# loopback interface for direct local runs.
 ENV FLASK_HOST=0.0.0.0
 ENV FLASK_PORT=5173
 ENV FLASK_DEBUG=false

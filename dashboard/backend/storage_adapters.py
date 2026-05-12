@@ -407,20 +407,12 @@ _current_adapter: Optional[StorageAdapter] = None
 
 
 def _get_default_log_dir() -> str:
-    """Get the default log directory with fallback logic."""
-    try:
-        from config import LOG_DIR
-        return str(LOG_DIR)
-    except ImportError:
-        # Fallback: discover standard Windsurf log locations
-        home = Path.home()
-        codeium_logs = home / ".codeium" / "windsurf" / "logs"
-        if codeium_logs.parent.exists():
-            return str(codeium_logs)
-        windsurf_logs = home / ".windsurf" / "logs"
-        if windsurf_logs.parent.exists():
-            return str(windsurf_logs)
-        return str(codeium_logs)
+    """Return the default log directory as a string.
+
+    Thin wrapper around ``config.LOG_DIR`` — the single source of truth.
+    """
+    from config import LOG_DIR
+    return str(LOG_DIR)
 
 
 def get_storage_adapter(config: Optional[Dict[str, Any]] = None) -> StorageAdapter:

@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "windsurf-fedramp-hooks-logger"
+version = "1.0.0"
+description = "Monitoring and visualization framework for Windsurf IDE agent activity (FedRAMP-oriented)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "COG-GTM" },
+]
+keywords = ["windsurf", "fedramp", "logging", "agent", "monitoring"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: MIT License",
+]
+
+dependencies = [
+    "flask>=3.0.0",
+    "flask-cors>=4.0.0",
+    "gunicorn>=21.0.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+cloud = [
+    "boto3>=1.28.0",
+    "azure-storage-blob>=12.19.0",
+    "azure-identity>=1.15.0",
+]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/COG-GTM/windsurf-fedramp-hooks-logger"
+Repository = "https://github.com/COG-GTM/windsurf-fedramp-hooks-logger"
+
+[tool.setuptools]
+py-modules = [
+    "cascade_logger",
+    "config",
+    "constants",
+    "windsurf_paths",
+    "install_hooks",
+    "uninstall_hooks",
+    "create_launcher",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dashboard*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-ra --strict-markers"

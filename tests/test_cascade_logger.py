@@ -2,14 +2,10 @@
 """Unit tests for cascade_logger.py"""
 
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from cascade_logger import (
     compute_content_hash,
@@ -220,6 +216,170 @@ class TestFullEventProcessing(unittest.TestCase):
         
         self.assertEqual(result["action"], "unknown_action")
         self.assertEqual(result["category"], "unknown")
+
+
+class TestWriteLogsAndRotation(unittest.TestCase):
+    """Tests for write_logs, write_human_readable, rotation, retention, main()."""
+
+    def setUp(self):
+        # Re-import cascade_logger with WINDSURF_LOG_DIR pointed at a tmpdir
+        # so writes are isolated.
+        import importlib
+        import os
+        import sys
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ["WINDSURF_LOG_DIR"] = self._tmp.name
+        sys.modules.pop("cascade_logger", None)
+        self.cl = importlib.import_module("cascade_logger")
+
+    def tearDown(self):
+        import os
+        os.environ.pop("WINDSURF_LOG_DIR", None)
+        self._tmp.cleanup()
+
+    def _sample_entry(self, action="pre_user_prompt", traj="t1"):
+        return {
+            "event_id": "x",
+            "timestamp": "2025-01-01T00:00:00",
+            "trajectory_id": traj,
+            "execution_id": "e",
+            "action": action,
+            "category": self.cl.EVENT_CATEGORIES.get(action, "unknown"),
+            "phase": self.cl.EVENT_PHASES.get(action, "unknown"),
+            "system": self.cl.get_system_info(),
+            "data": {"user_prompt": "hi", "prompt_length": 2},
+            "raw_tool_info": {},
+        }
+
+    def test_write_logs_creates_expected_files(self):
+        self.cl.write_logs(self._sample_entry("pre_user_prompt", "traj-X"))
+        log_dir = self.cl.LOG_DIR
+        self.assertTrue((log_dir / "all_events.jsonl").exists())
+        self.assertTrue((log_dir / "prompt.jsonl").exists())
+        self.assertTrue((log_dir / "pre_user_prompt.jsonl").exists())
+        self.assertTrue((log_dir / "sessions" / "traj-X.jsonl").exists())
+        self.assertTrue((log_dir / "summary.log").exists())
+
+    def test_write_logs_sanitises_trajectory_id(self):
+        entry = self._sample_entry("pre_user_prompt", "../evil/../etc/passwd")
+        self.cl.write_logs(entry)
+        sessions = list((self.cl.LOG_DIR / "sessions").iterdir())
+        for s in sessions:
+            self.assertNotIn("..", s.name)
+            self.assertNotIn("/", s.name)
+
+    def test_write_logs_code_changes_only_for_writes(self):
+        entry = {
+            "event_id": "y",
+            "timestamp": "2025-01-01T00:00:00",
+            "trajectory_id": "t",
+            "execution_id": "e",
+            "action": "post_write_code",
+            "category": "file_write",
+            "phase": "post",
+            "system": self.cl.get_system_info(),
+            "data": {"file_path": "/x.py", "edit_count": 3, "total_lines_added": 5, "total_lines_removed": 1},
+            "raw_tool_info": {},
+        }
+        self.cl.write_logs(entry)
+        self.assertTrue((self.cl.LOG_DIR / "code_changes.jsonl").exists())
+
+    def test_rotate_if_needed_rotates_oversized(self):
+        target = self.cl.LOG_DIR / "big.jsonl"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x" * 100)
+        # Force rotation with max_size_bytes < file size.
+        self.cl.rotate_if_needed(target, max_size_bytes=10, max_files=3)
+        self.assertFalse(target.exists() and target.stat().st_size > 0)
+        self.assertTrue((self.cl.LOG_DIR / "big.jsonl.1").exists())
+
+    def test_rotate_if_needed_no_op_for_small_files(self):
+        target = self.cl.LOG_DIR / "small.jsonl"
+        target.write_text("ok\n")
+        self.cl.rotate_if_needed(target, max_size_bytes=1024, max_files=3)
+        self.assertTrue(target.exists())
+        self.assertFalse((self.cl.LOG_DIR / "small.jsonl.1").exists())
+
+    def test_cleanup_old_session_logs_removes_old_files(self):
+        import os, time
+        sessions_dir = self.cl.LOG_DIR / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        old = sessions_dir / "old.jsonl"
+        new = sessions_dir / "new.jsonl"
+        old.write_text("{}\n")
+        new.write_text("{}\n")
+        # Backdate `old` by 200 days.
+        old_ts = time.time() - 200 * 86400
+        os.utime(old, (old_ts, old_ts))
+        self.cl.cleanup_old_session_logs(retention_days=90)
+        self.assertFalse(old.exists(), "old session log should be deleted")
+        self.assertTrue(new.exists(), "recent session log should survive")
+
+    def test_cleanup_runs_only_once_per_day(self):
+        # First call creates the marker; second call should be a no-op even
+        # though we re-create a stale file.
+        import os, time
+        sessions_dir = self.cl.LOG_DIR / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        self.cl.cleanup_old_session_logs(retention_days=90)
+        marker = self.cl.LOG_DIR / ".last_cleanup"
+        self.assertTrue(marker.exists())
+
+        stale = sessions_dir / "stale.jsonl"
+        stale.write_text("{}\n")
+        os.utime(stale, (time.time() - 365 * 86400, time.time() - 365 * 86400))
+        # Marker is fresh -> cleanup skipped -> stale must survive.
+        self.cl.cleanup_old_session_logs(retention_days=90)
+        self.assertTrue(stale.exists())
+
+    def test_log_error_writes_to_errors_log(self):
+        self.cl.log_error("boom")
+        contents = (self.cl.LOG_DIR / "errors.log").read_text()
+        self.assertIn("boom", contents)
+
+
+class TestMainEntrypoint(unittest.TestCase):
+    """Cover main() with valid JSON / invalid JSON / empty stdin."""
+
+    def setUp(self):
+        import importlib
+        import os
+        import sys
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ["WINDSURF_LOG_DIR"] = self._tmp.name
+        sys.modules.pop("cascade_logger", None)
+        self.cl = importlib.import_module("cascade_logger")
+
+    def tearDown(self):
+        import os
+        os.environ.pop("WINDSURF_LOG_DIR", None)
+        self._tmp.cleanup()
+
+    def _run_main(self, stdin_text):
+        import io
+        with patch("sys.stdin", io.StringIO(stdin_text)):
+            with self.assertRaises(SystemExit) as ctx:
+                self.cl.main()
+        return ctx.exception.code
+
+    def test_main_empty_stdin_exits_zero(self):
+        self.assertEqual(self._run_main(""), 0)
+
+    def test_main_valid_json_writes_logs(self):
+        payload = json.dumps({
+            "agent_action_name": "pre_user_prompt",
+            "trajectory_id": "tm",
+            "execution_id": "em",
+            "timestamp": "2025-01-01T00:00:00",
+            "tool_info": {"user_prompt": "hi"},
+        })
+        self.assertEqual(self._run_main(payload), 0)
+        self.assertTrue((self.cl.LOG_DIR / "all_events.jsonl").exists())
+
+    def test_main_invalid_json_logs_error(self):
+        rc = self._run_main("{not valid json")
+        self.assertEqual(rc, 1)
+        self.assertTrue((self.cl.LOG_DIR / "errors.log").exists())
 
 
 if __name__ == "__main__":

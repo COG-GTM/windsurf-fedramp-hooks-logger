@@ -7,62 +7,50 @@ import os
 import re
 import csv
 import io
-import sys
 import time
 import threading
 import subprocess
 import platform
+import logging
+import hmac
 from pathlib import Path
 from datetime import datetime, timedelta
 from functools import wraps
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from typing import Optional, Dict, List, Any, Generator
 
-# Import storage adapters
+# Storage adapters (sibling module — same directory).
 from storage_adapters import (
     get_storage_adapter, configure_storage, get_current_storage_config,
     reset_storage, LocalStorageAdapter, HAS_BOTO3, HAS_AZURE
 )
 
-# Add parent directory to path for config import
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-try:
-    from config import (
-        LOG_DIR, FLASK_HOST, FLASK_PORT, FLASK_DEBUG,
-        DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, CACHE_TTL, CACHE_MAX_SIZE,
-        RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW, CORS_ORIGINS, ALLOWED_BROWSE_PATHS
-    )
-except ImportError:
-    # Fallback defaults if config not available
-    # Use standard Windsurf log location, not repo-relative path
-    def _get_fallback_log_dir():
-        home = Path.home()
-        # Primary Windsurf data location
-        codeium_logs = home / ".codeium" / "windsurf" / "logs"
-        if codeium_logs.parent.exists():
-            return codeium_logs
-        # Fallback location
-        windsurf_logs = home / ".windsurf" / "logs"
-        if windsurf_logs.parent.exists():
-            return windsurf_logs
-        # Default to primary
-        return codeium_logs
-    
-    LOG_DIR = _get_fallback_log_dir()
-    FLASK_HOST = "0.0.0.0"
-    FLASK_PORT = 5173
-    FLASK_DEBUG = False
-    DEFAULT_PAGE_SIZE = 100
-    MAX_PAGE_SIZE = 1000
-    CACHE_TTL = 60
-    CACHE_MAX_SIZE = 100
-    RATE_LIMIT_REQUESTS = 100
-    RATE_LIMIT_WINDOW = 60
-    CORS_ORIGINS = ["*"]
-    ALLOWED_BROWSE_PATHS = [str(Path(__file__).parent.parent.parent), os.path.expanduser("~")]
+# Repo-level config + shared constants are installed alongside this app
+# (Dockerfile copies them; for local dev the repo root is on PYTHONPATH).
+from config import (
+    LOG_DIR, FLASK_HOST, FLASK_PORT, FLASK_DEBUG,
+    DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, CACHE_TTL, CACHE_MAX_SIZE,
+    RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW, CORS_ORIGINS, ALLOWED_BROWSE_PATHS,
+    API_KEY, ENABLE_ADMIN_ENDPOINTS,
+)
+from constants import EVENT_CATEGORIES as ACTION_TO_CATEGORY
 
 app = Flask(__name__, static_folder='../frontend/dist', static_url_path='')
 CORS(app, origins=CORS_ORIGINS)
+
+# Server-controlled allow-list of trusted browser origins. The SPA bundled with
+# this Flask app is served from one of these origins and is allowed to call the
+# API without a Bearer token. We strip whitespace at startup so we can match
+# the request's Origin header exactly. "*" is intentionally *not* treated as
+# trusted — a wildcard CORS policy is for unauthenticated dev, not for
+# bypassing the API key gate.
+_TRUSTED_BROWSER_ORIGINS = {o.strip().rstrip("/") for o in CORS_ORIGINS if o and o.strip() and o.strip() != "*"}
+
+if not API_KEY:
+    logging.getLogger(__name__).warning(
+        "WINDSURF_API_KEY is not set; /api/ endpoints are unauthenticated. "
+        "Set WINDSURF_API_KEY for production deployments."
+    )
 
 DEFAULT_LOG_DIR = str(LOG_DIR)
 
@@ -167,6 +155,135 @@ def rate_limit(f):
     return decorated_function
 
 
+# Sec-Fetch-Dest values a real browser fetch() can produce. We accept either
+# 'empty' (default for fetch with no special destination) or 'document' (page
+# navigation). Everything else (image / script / font / iframe etc.) is not
+# what the SPA's ``fetch('/api/...')`` would generate and signals a different
+# (and potentially attacker-driven) request shape.
+_BROWSER_FETCH_DESTS = {"empty", "document"}
+
+
+def _is_trusted_browser_request(req) -> bool:
+    """Return True iff the request was issued by the bundled SPA in a browser.
+
+    The dashboard SPA is served by the same Flask app. We accept **either**
+    of two browser-set signal sets:
+
+    1. ``Origin`` header matches the server-controlled ``CORS_ORIGINS``
+       allow-list. Browsers refuse to send a custom ``Origin`` on a
+       cross-origin request, so a malicious page cannot forge this.
+       Chrome omits ``Origin`` on **same-origin GET/HEAD** fetches, which
+       is why we have a second signal set.
+    2. The full ``Sec-Fetch-*`` triplet a real browser fetch produces:
+       ``Sec-Fetch-Site: same-origin`` **and** ``Sec-Fetch-Mode: cors``
+       **and** ``Sec-Fetch-Dest`` in ``{empty, document}``. These are
+       "forbidden" headers — a cross-origin page running JavaScript cannot
+       set them (the browser overrides JS-supplied values), and the
+       browser computes them itself based on its actual origin context.
+       Requiring all three raises the bar above "single-header curl
+       drive-by" attacks.
+
+    **Security note (be honest about the threat model):** a CLI client
+    that can spoof arbitrary HTTP headers (``curl --header ...``) can
+    spoof both an arbitrary ``Origin`` *and* the ``Sec-Fetch-*`` triplet.
+    The same was true for the previous Origin-only check. The Bearer
+    token (``WINDSURF_API_KEY``) is the real defense against CLI /
+    server-to-server attackers; the Origin / Sec-Fetch checks defend
+    against **browser-context CSRF** (a malicious page running JS in a
+    different origin) where the browser refuses to let the attacking page
+    forge these headers.
+
+    Crucially, ``Origin`` is compared against the **server-controlled**
+    ``CORS_ORIGINS`` allow-list, never ``request.host_url`` — the latter
+    is derived from the client-supplied ``Host`` header and would let an
+    attacker set ``Host`` + ``Origin`` to matching attacker-chosen values
+    to bypass the gate.
+    """
+    origin = req.headers.get("Origin", "").strip().rstrip("/")
+    if origin and _TRUSTED_BROWSER_ORIGINS and origin in _TRUSTED_BROWSER_ORIGINS:
+        return True
+    site = req.headers.get("Sec-Fetch-Site", "").strip().lower()
+    mode = req.headers.get("Sec-Fetch-Mode", "").strip().lower()
+    dest = req.headers.get("Sec-Fetch-Dest", "").strip().lower()
+    if site == "same-origin" and mode == "cors" and dest in _BROWSER_FETCH_DESTS:
+        return True
+    return False
+
+
+def _bearer_token_ok(req) -> bool:
+    """Validate the Bearer token on the request against ``API_KEY``.
+
+    Uses ``hmac.compare_digest`` so the comparison is constant-time with
+    respect to the secret — a plain ``==`` short-circuits on the first
+    differing byte and lets a remote attacker derive the key byte-by-byte
+    via response-latency measurements (STIG / FedRAMP requirement).
+    """
+    if API_KEY is None:
+        return False
+    header = req.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return False
+    provided = header[len("Bearer "):].strip()
+    return hmac.compare_digest(provided, API_KEY)
+
+
+def require_auth(f):
+    """Decorator: require ``Authorization: Bearer <WINDSURF_API_KEY>``.
+
+    If ``WINDSURF_API_KEY`` is unset the decorator is a no-op (backward
+    compatibility for local dev). When ``API_KEY`` is set, requests
+    without a valid Bearer token are rejected with 401 — except for
+    browser ``fetch`` calls whose ``Origin`` header is in the
+    server-controlled ``CORS_ORIGINS`` allow-list.
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if API_KEY is None or _is_trusted_browser_request(request) or _bearer_token_ok(request):
+            return f(*args, **kwargs)
+        return jsonify({"error": "Unauthorized"}), 401
+    return decorated_function
+
+
+def require_admin(f):
+    """Decorator for admin endpoints that spawn OS processes.
+
+    Returns 403 unless ``ENABLE_ADMIN_ENDPOINTS=true``. Auth is enforced
+    by the global ``_enforce_api_auth`` before-request hook (same-origin
+    SPA requests or valid Bearer token when an API key is configured).
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not ENABLE_ADMIN_ENDPOINTS:
+            return jsonify({
+                "error": "Admin endpoints are disabled. Set ENABLE_ADMIN_ENDPOINTS=true to enable."
+            }), 403
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+@app.before_request
+def _enforce_api_auth():
+    """Global gate for /api/ endpoints when an API key is configured.
+
+    Health checks are exempt so container orchestrators can probe
+    liveness without credentials. Browser requests whose ``Origin`` is
+    in ``CORS_ORIGINS`` are trusted (the bundled SPA case). External
+    API consumers must present a valid Bearer token.
+    """
+    if API_KEY is None:
+        return None
+    path = request.path or ""
+    if not path.startswith("/api/"):
+        return None
+    if path == "/api/health":
+        return None
+    if _is_trusted_browser_request(request):
+        return None
+    if _bearer_token_ok(request):
+        return None
+    return jsonify({"error": "Unauthorized"}), 401
+
+
 # ============================================================================
 # Input Validation
 # ============================================================================
@@ -245,16 +362,36 @@ def parse_jsonl_file(filepath: str, limit: Optional[int] = None, offset: int = 0
     return entries
 
 
+# mtime-keyed cache for JSONL line counts so repeat calls on an unchanged
+# file avoid re-reading megabytes from disk.
+_count_cache: Dict[str, tuple] = {}
+_count_cache_lock = threading.Lock()
+
+
 def count_jsonl_entries(filepath: str) -> int:
-    """Count entries in a JSONL file efficiently."""
+    """Count entries in a JSONL file with mtime-based caching."""
     if not os.path.exists(filepath) or not filepath.endswith('.jsonl'):
         return 0
-    
+
+    try:
+        mtime = os.path.getmtime(filepath)
+    except OSError:
+        return 0
+
+    with _count_cache_lock:
+        cached = _count_cache.get(filepath)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
-            return sum(1 for line in f if line.strip())
+            count = sum(1 for line in f if line.strip())
     except (IOError, OSError):
         return 0
+
+    with _count_cache_lock:
+        _count_cache[filepath] = (mtime, count)
+    return count
 
 
 def normalize_entry(entry):
@@ -294,18 +431,9 @@ def normalize_entry(entry):
     return entry
 
 
-# Action to category mapping for text log parsing
-ACTION_TO_CATEGORY = {
-    "pre_user_prompt": "prompt",
-    "pre_read_code": "file_read",
-    "post_read_code": "file_read",
-    "pre_write_code": "file_write",
-    "post_write_code": "file_write",
-    "pre_run_command": "command",
-    "post_run_command": "command",
-    "pre_mcp_tool_use": "mcp",
-    "post_mcp_tool_use": "mcp",
-}
+# Action -> category mapping for text log parsing comes from the shared
+# constants module (imported at the top of this file as
+# ACTION_TO_CATEGORY).
 
 
 def parse_text_log(filepath):
@@ -552,14 +680,48 @@ def get_log_files():
     return jsonify(result)
 
 
+def _entry_matches_filters(entry: Dict[str, Any], category: Optional[str],
+                           user: Optional[str], session: Optional[str],
+                           query: str, date_from: Optional[str],
+                           date_to: Optional[str]) -> bool:
+    """Return True if the given entry passes all filter predicates."""
+    entry_category = entry.get('category', entry.get('type', ''))
+    if category and category != 'all' and entry_category != category:
+        return False
+    if user and user != 'all' and entry.get('user') != user:
+        return False
+    if session and session != 'all' and entry.get('trajectory_id') != session:
+        return False
+    timestamp = entry.get('timestamp', '')
+    if date_from and timestamp < date_from:
+        return False
+    if date_to and timestamp > date_to:
+        return False
+    if query:
+        searchable = get_searchable_text(entry)
+        if query.lower() not in searchable.lower():
+            return False
+    return True
+
+
 @app.route('/api/logs/data', methods=['GET'])
 @rate_limit
 def get_log_data():
-    """Get log data from specified file(s) with pagination and filter support."""
+    """Get log data from specified file(s) with pagination and filter support.
+
+    For local JSONL sources, entries are streamed and filtered inline so
+    only matching rows on the requested page are materialised in memory.
+    For remote and text-log sources we fall back to materialising the full
+    list (those code paths are unchanged in behaviour).
+    """
     filepaths = request.args.getlist('files')
     page = max(1, int(request.args.get('page', 1)))
-    page_size = min(MAX_PAGE_SIZE, int(request.args.get('page_size', DEFAULT_PAGE_SIZE)))
-    
+    # Clamp page_size into [1, MAX_PAGE_SIZE]. Without the lower bound, 0 or a
+    # negative value would make end_idx <= 0, which both creates an unbounded
+    # deque in the streaming path and divides by zero when computing
+    # total_pages.
+    page_size = max(1, min(MAX_PAGE_SIZE, int(request.args.get('page_size', DEFAULT_PAGE_SIZE))))
+
     # Filter parameters
     category = request.args.get('category')
     user = request.args.get('user')
@@ -567,101 +729,126 @@ def get_log_data():
     query = request.args.get('q', '')
     date_from = request.args.get('date_from')
     date_to = request.args.get('date_to')
-    
+
     # Check for remote storage
     adapter = get_active_adapter()
     storage_config = get_current_storage_config()
     using_remote = storage_config is not None and storage_config.get('type') in ('s3', 'azure')
-    
+
     if not filepaths:
         if using_remote:
-            # For remote storage, try to find all_events.jsonl in the configured location
             try:
                 files = adapter.list_files()
                 all_events = next((f for f in files if f['name'] == 'all_events.jsonl'), None)
                 if all_events:
                     filepaths = [all_events.get('s3_key') or all_events.get('blob_name') or all_events['path']]
                 else:
-                    # Use first available file
                     filepaths = [files[0].get('s3_key') or files[0].get('blob_name') or files[0]['path']] if files else []
             except Exception:
                 filepaths = []
         else:
             filepaths = [os.path.join(DEFAULT_LOG_DIR, 'all_events.jsonl')]
-    
-    all_entries = []
-    
+
+    start_idx = (page - 1) * page_size
+    end_idx = start_idx + page_size
+
+    # Streaming-friendly fast path: pure local JSONL + no text search means
+    # we don't need to sort by timestamp (files are already chronological)
+    # and can stop reading once we've gathered the requested page.
+    can_stream = (
+        not using_remote
+        and all(fp.endswith('.jsonl') for fp in filepaths)
+        and not query  # query requires global ranking on a single file
+        and len(filepaths) == 1
+    )
+
+    if can_stream:
+        filepath = filepaths[0]
+        if not validate_path(filepath) or not os.path.exists(filepath):
+            return jsonify({
+                "entries": [], "total": 0, "page": page, "page_size": page_size,
+                "total_pages": 0, "files_loaded": filepaths,
+                "filters_applied": {
+                    "category": category, "user": user, "session": session,
+                    "query": query, "date_from": date_from, "date_to": date_to,
+                },
+            })
+        source_name = os.path.basename(filepath)
+        matched_count = 0
+        # The API contract is newest-first pagination, but the file is
+        # append-only (oldest-first). To paginate newest-first without
+        # materialising every entry, keep a sliding window of the last
+        # `end_idx` matches seen. After streaming, `total` is known and
+        # the buffer holds exactly the entries needed for this page.
+        # end_idx is guaranteed > 0 by the page_size clamp above, but keep the
+        # defensive maxlen=0 fallback so this never becomes an unbounded deque.
+        buffer: deque = deque(maxlen=end_idx if end_idx > 0 else 0)
+        for entry in stream_jsonl_file(filepath):
+            if not _entry_matches_filters(entry, category, user, session, query, date_from, date_to):
+                continue
+            matched_count += 1
+            entry['source_file'] = source_name
+            buffer.append(entry)
+        total = matched_count
+        # Slice the buffer to the page window then reverse to newest-first.
+        # The buffer holds matches at file-positions [total - len(buffer),
+        # total). The window we want (oldest-first within the page) is
+        # file-positions [max(0, total - end_idx), total - start_idx).
+        # Within the buffer this is index 0 .. len(buffer) - start_idx.
+        take = max(0, len(buffer) - start_idx)
+        results = list(buffer)[:take]
+        results.reverse()
+        return jsonify({
+            "entries": results,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
+            "files_loaded": filepaths,
+            "filters_applied": {
+                "category": category, "user": user, "session": session,
+                "query": query, "date_from": date_from, "date_to": date_to,
+            },
+        })
+
+    # Fallback path: remote storage, text logs, multiple files, or text search.
+    all_entries: List[Dict[str, Any]] = []
     for filepath in filepaths:
         try:
             if using_remote:
-                # Read from remote storage
                 content = adapter.read_file(filepath)
                 if filepath.endswith('.jsonl') or 'jsonl' in filepath:
                     entries = parse_remote_jsonl_content(content)
                 else:
-                    # For text logs, we'd need to parse differently
                     entries = []
                 source_name = filepath.split('/')[-1]
             else:
-                # Local storage
                 if not validate_path(filepath):
                     continue
                 if not os.path.exists(filepath):
                     continue
-                
                 if filepath.endswith('.jsonl'):
                     entries = parse_jsonl_file(filepath)
                 else:
                     entries = parse_text_log(filepath)
                 source_name = os.path.basename(filepath)
-            
+
             for entry in entries:
                 entry['source_file'] = source_name
             all_entries.extend(entries)
         except Exception as e:
             app.logger.error(f"Error reading file {filepath}: {e}")
             continue
-    
-    # Apply filters
-    filtered_entries = []
-    for entry in all_entries:
-        # Category filter
-        entry_category = entry.get('category', entry.get('type', ''))
-        if category and category != 'all' and entry_category != category:
-            continue
-        
-        # User filter
-        if user and user != 'all' and entry.get('user') != user:
-            continue
-        
-        # Session filter
-        if session and session != 'all' and entry.get('trajectory_id') != session:
-            continue
-        
-        # Date range filter
-        timestamp = entry.get('timestamp', '')
-        if date_from and timestamp < date_from:
-            continue
-        if date_to and timestamp > date_to:
-            continue
-        
-        # Text search
-        if query:
-            searchable = get_searchable_text(entry)
-            if query.lower() not in searchable.lower():
-                continue
-        
-        filtered_entries.append(entry)
-    
-    # Sort by timestamp
+
+    filtered_entries = [
+        entry for entry in all_entries
+        if _entry_matches_filters(entry, category, user, session, query, date_from, date_to)
+    ]
     filtered_entries.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
-    
-    # Apply pagination
+
     total = len(filtered_entries)
-    start_idx = (page - 1) * page_size
-    end_idx = start_idx + page_size
     paginated_entries = filtered_entries[start_idx:end_idx]
-    
+
     return jsonify({
         "entries": paginated_entries,
         "total": total,
@@ -670,13 +857,9 @@ def get_log_data():
         "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
         "files_loaded": filepaths,
         "filters_applied": {
-            "category": category,
-            "user": user,
-            "session": session,
-            "query": query,
-            "date_from": date_from,
-            "date_to": date_to
-        }
+            "category": category, "user": user, "session": session,
+            "query": query, "date_from": date_from, "date_to": date_to,
+        },
     })
 
 
@@ -795,53 +978,43 @@ def search_logs():
     
     if not os.path.exists(log_path):
         return jsonify({"entries": [], "total": 0})
-    
-    entries = parse_jsonl_file(log_path)
-    results = []
-    
-    # Compile regex if needed
+
+    # Compile regex once outside the streaming loop.
     regex_pattern = None
     if query and use_regex:
         try:
             regex_pattern = re.compile(query, re.IGNORECASE)
         except re.error:
             return jsonify({"error": "Invalid regex pattern", "entries": [], "total": 0})
-    
-    for entry in entries:
+
+    results: List[Dict[str, Any]] = []
+    for entry in stream_jsonl_file(log_path):
         # Category filter
         entry_category = entry.get('category', entry.get('type', ''))
         if category and entry_category != category:
             continue
-        
         # User filter
         if user and entry.get('user') != user:
             continue
-        
         # Session filter
         if session and entry.get('trajectory_id') != session:
             continue
-        
         # Date range filter
         timestamp = entry.get('timestamp', '')
         if date_from and timestamp < date_from:
             continue
         if date_to and timestamp > date_to:
             continue
-        
         # File extension filter (for file operations)
         if file_ext:
             data = entry.get('data', {})
-            entry_ext = data.get('file_extension', '')
-            if entry_ext != file_ext:
+            if data.get('file_extension', '') != file_ext:
                 continue
-        
         # Command name filter
         if command_name:
             data = entry.get('data', {})
-            entry_cmd = data.get('command_name', '')
-            if entry_cmd != command_name:
+            if data.get('command_name', '') != command_name:
                 continue
-        
         # Text search
         if query:
             searchable = get_searchable_text(entry)
@@ -851,9 +1024,8 @@ def search_logs():
             else:
                 if query.lower() not in searchable.lower():
                     continue
-        
         results.append(entry)
-    
+
     results.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
     
     return jsonify({
@@ -1456,6 +1628,7 @@ def get_env_info():
 
 
 @app.route('/api/config/reveal-env', methods=['POST'])
+@require_admin
 def reveal_env_file():
     """Open the .env file location in Finder/Explorer."""
     env_path = PROJECT_ROOT / '.env'
@@ -1495,6 +1668,7 @@ def reveal_env_file():
 
 
 @app.route('/api/config/open-env', methods=['POST'])
+@require_admin
 def open_env_file():
     """Open the .env file in the default text editor."""
     env_path = PROJECT_ROOT / '.env'
@@ -1555,6 +1729,7 @@ def open_env_file():
 
 
 @app.route('/api/config/restart-backend', methods=['POST'])
+@require_admin
 def restart_backend():
     """Restart the backend server by opening a new terminal with the start script."""
     start_script = PROJECT_ROOT / 'dashboard' / 'start.sh'

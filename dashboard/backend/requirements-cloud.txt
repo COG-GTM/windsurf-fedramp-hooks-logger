@@ -1,0 +1,6 @@
+# Optional cloud storage SDKs. Install with:
+#   pip install -r dashboard/backend/requirements-cloud.txt
+# Only needed when using S3 or Azure Blob storage adapters.
+boto3>=1.28.0
+azure-storage-blob>=12.19.0
+azure-identity>=1.15.0
