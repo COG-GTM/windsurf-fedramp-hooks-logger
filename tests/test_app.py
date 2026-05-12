@@ -70,6 +70,25 @@ def test_api_requires_auth_when_key_configured(client_with_auth):
     assert resp.status_code == 200
 
 
+def test_api_allows_same_origin_when_key_configured(client_with_auth):
+    """Browser fetch() from the bundled SPA carries Origin matching the host;
+    those calls should bypass the Bearer requirement because the SPA never
+    learns the key. CORS_ORIGINS still gates cross-origin callers."""
+    client, _ = client_with_auth
+    # Flask test client default host_url is http://localhost/.
+    resp = client.get("/api/logs/files", headers={"Origin": "http://localhost"})
+    assert resp.status_code == 200
+    # Foreign Origin should still be rejected.
+    resp = client.get("/api/logs/files", headers={"Origin": "http://evil.example"})
+    assert resp.status_code == 401
+    # Referer fallback for navigations without Origin.
+    resp = client.get(
+        "/api/logs/files",
+        headers={"Referer": "http://localhost/dashboard"},
+    )
+    assert resp.status_code == 200
+
+
 def test_api_is_open_when_key_unset(client_no_auth):
     client, _ = client_no_auth
     resp = client.get("/api/logs/files")

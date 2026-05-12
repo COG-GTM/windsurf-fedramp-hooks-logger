@@ -41,13 +41,20 @@ if platform.system() == 'Windows':
     import msvcrt
 
     def lock_file(f) -> None:
-        """Acquire exclusive lock on the entire file (Windows)."""
+        """Acquire exclusive lock on the entire file (Windows).
+
+        The locked byte range is recorded on the file object as
+        ``_locked_size`` so the matching ``unlock_file`` releases the
+        exact same range — ``msvcrt.locking(LK_UNLCK, size)`` only
+        succeeds when ``size`` matches the originally locked range.
+        """
         f.seek(0, os.SEEK_END)
         size = f.tell() or 1
         f.seek(0)
         for attempt in range(5):
             try:
                 msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, size)
+                f._locked_size = size  # type: ignore[attr-defined]
                 return
             except OSError:
                 if attempt < 4:
@@ -56,14 +63,23 @@ if platform.system() == 'Windows':
                     raise
 
     def unlock_file(f) -> None:
-        """Release lock on the entire file (Windows)."""
-        f.seek(0, os.SEEK_END)
-        size = f.tell() or 1
+        """Release lock on the entire file (Windows).
+
+        Uses the size recorded by ``lock_file`` rather than recomputing
+        from the file (which now has more bytes after the write) so the
+        unlock range matches the lock range exactly.
+        """
+        size = getattr(f, "_locked_size", None)
+        if size is None:
+            return  # lock_file was never called or already unlocked
         f.seek(0)
         try:
             msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, size)
-        except OSError:
-            pass  # Ignore unlock errors (file may not be locked)
+        finally:
+            try:
+                delattr(f, "_locked_size")
+            except AttributeError:
+                pass
 else:
     import fcntl
 

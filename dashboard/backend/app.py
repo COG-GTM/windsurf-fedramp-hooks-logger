@@ -146,37 +146,60 @@ def rate_limit(f):
     return decorated_function
 
 
+def _is_same_origin(req) -> bool:
+    """Return True iff the request originated from this server's own host.
+
+    The dashboard SPA is served by the same Flask app at the same origin.
+    Browser ``fetch`` calls from the SPA carry an ``Origin`` (and ``Referer``)
+    header that matches the server's host. Such requests are already gated
+    by CORS_ORIGINS for cross-origin callers, so we treat same-origin
+    requests as trusted — the Bearer API key is intended for external API
+    consumers (curl, Postman, scripts), not the SPA.
+    """
+    host_url = (req.host_url or "").rstrip("/")
+    if not host_url:
+        return False
+    origin = req.headers.get("Origin", "").rstrip("/")
+    if origin:
+        return origin == host_url
+    referer = req.headers.get("Referer", "")
+    if referer:
+        return referer == host_url or referer.startswith(host_url + "/")
+    return False
+
+
+def _bearer_token_ok(req) -> bool:
+    """Validate the Bearer token on the request against ``API_KEY``."""
+    header = req.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return False
+    return header[len("Bearer "):].strip() == API_KEY
+
+
 def require_auth(f):
     """Decorator: require ``Authorization: Bearer <WINDSURF_API_KEY>``.
 
     If ``WINDSURF_API_KEY`` is unset the decorator is a no-op (backward
-    compatibility for local dev). A startup warning is emitted in that
-    case. When ``API_KEY`` is set, requests missing or with the wrong
-    bearer token are rejected with 401.
+    compatibility for local dev). When ``API_KEY`` is set, requests
+    without a valid Bearer token are rejected with 401 — except for
+    same-origin SPA requests, which are gated by CORS_ORIGINS instead.
     """
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if API_KEY is None:
+        if API_KEY is None or _is_same_origin(request) or _bearer_token_ok(request):
             return f(*args, **kwargs)
-        header = request.headers.get("Authorization", "")
-        if not header.startswith("Bearer "):
-            return jsonify({"error": "Unauthorized"}), 401
-        provided = header[len("Bearer "):].strip()
-        if provided != API_KEY:
-            return jsonify({"error": "Unauthorized"}), 401
-        return f(*args, **kwargs)
+        return jsonify({"error": "Unauthorized"}), 401
     return decorated_function
 
 
 def require_admin(f):
     """Decorator for admin endpoints that spawn OS processes.
 
-    Returns 403 unless ``ENABLE_ADMIN_ENDPOINTS=true``. Always also
-    applies ``require_auth`` so even an enabled admin endpoint demands a
-    valid API key when one is configured.
+    Returns 403 unless ``ENABLE_ADMIN_ENDPOINTS=true``. Auth is enforced
+    by the global ``_enforce_api_auth`` before-request hook (same-origin
+    SPA requests or valid Bearer token when an API key is configured).
     """
     @wraps(f)
-    @require_auth
     def decorated_function(*args, **kwargs):
         if not ENABLE_ADMIN_ENDPOINTS:
             return jsonify({
@@ -191,22 +214,23 @@ def _enforce_api_auth():
     """Global gate for /api/ endpoints when an API key is configured.
 
     Health checks are exempt so container orchestrators can probe
-    liveness without credentials. Per-endpoint decorators may further
-    restrict access (e.g. admin endpoints).
+    liveness without credentials. Same-origin requests from the bundled
+    SPA are allowed through because CORS_ORIGINS already enforces who
+    may call the API cross-origin. External API consumers must present
+    a valid Bearer token.
     """
     if API_KEY is None:
         return None
     path = request.path or ""
     if not path.startswith("/api/"):
         return None
-    if path in ("/api/health",):
+    if path == "/api/health":
         return None
-    header = request.headers.get("Authorization", "")
-    if not header.startswith("Bearer "):
-        return jsonify({"error": "Unauthorized"}), 401
-    if header[len("Bearer "):].strip() != API_KEY:
-        return jsonify({"error": "Unauthorized"}), 401
-    return None
+    if _is_same_origin(request):
+        return None
+    if _bearer_token_ok(request):
+        return None
+    return jsonify({"error": "Unauthorized"}), 401
 
 
 # ============================================================================
