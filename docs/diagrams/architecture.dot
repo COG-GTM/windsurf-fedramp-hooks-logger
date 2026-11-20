@@ -1,0 +1,54 @@
+// Windsurf FedRAMP Hooks Logger - architecture
+// Edit this file, then run ./render.sh to regenerate architecture.png / architecture.svg.
+digraph architecture {
+  graph [rankdir=TB, fontname="DejaVu Sans", fontsize=18, labelloc=t, nodesep=0.45, ranksep=0.6,
+         label="Windsurf FedRAMP Hooks Logger: hooks -> logger -> storage -> dashboard", pad=0.3];
+  node  [shape=box, style="rounded,filled", fontname="DejaVu Sans", fontsize=16, fillcolor=white, color="#555555"];
+  edge  [fontname="DejaVu Sans", fontsize=13, color="#444444"];
+
+  subgraph cluster_workstation {
+    label="Developer workstation (~/.codeium/windsurf or ~/.windsurf)"; style="rounded,dashed"; color="#888888"; fontsize=16;
+
+    windsurf  [label="Windsurf IDE\nCascade agent\n(9 pre_/post_ hook events)", fillcolor="#dbe9ff"];
+    hooksjson [label="hooks.json\none command per event:\npython3 \"<data dir>/cascade_logger.py\"", shape=note, fillcolor="#fff6d5"];
+    logger    [label="cascade_logger.py (installed copy)\nshort-lived process per event:\nstdin JSON -> process_event()\n-> write_logs() with file lock,\nrotation, 90-day session cleanup", fillcolor="#e3f5e1"];
+
+    subgraph cluster_install {
+      label="Repo setup scripts"; style="rounded"; color="#aaaaaa"; fontsize=14;
+      installer [label="install_hooks.py / uninstall_hooks.py\n(windsurf_paths.py: path discovery,\nbackup + install manifest)", fillcolor="#f2f2f2"];
+      launchers [label="create_launcher.py\ndashboard/start.sh | start.bat", fillcolor="#f2f2f2"];
+      {rank=same; installer; launchers;}
+    }
+
+    logs [label="Log directory (WINDSURF_LOG_DIR, default <data dir>/logs)\nall_events.jsonl | <category>.jsonl | <action>.jsonl\nsessions/<trajectory_id>.jsonl | code_changes.jsonl\nsummary.log | errors.log", shape=folder, fillcolor="#fde8d7"];
+  }
+
+  cloud [label="Optional remote storage\nAWS S3 bucket/prefix\nAzure Blob container/path\n(log shipping is not part of this repo)", shape=cylinder, fillcolor="#efe3fb"];
+
+  subgraph cluster_dashboard {
+    label="Dashboard (local: start.sh / start.bat, or Docker image / docker-compose)"; style="rounded"; color="#3a6ea5"; fontsize=16;
+
+    spa     [label="React SPA (dashboard/frontend, Vite)\nApp.jsx + components/ + hooks/useLogData.js\ndev server :5174 proxies /api -> :5173;\nDocker serves the built dist/ from Flask", fillcolor="#dbe9ff"];
+    flask   [label="Flask API (dashboard/backend/app.py) :5173\n/api/logs/{files,data,stats,search,sessions,metrics,export}\n/api/storage/*  /api/directories/browse  /health\nrate limit, LRU cache, optional Bearer WINDSURF_API_KEY,\nadmin endpoints off unless ENABLE_ADMIN_ENDPOINTS", fillcolor="#e3f5e1"];
+    adapters [label="storage_adapters.py\nLocalStorageAdapter | S3StorageAdapter | AzureStorageAdapter\n(active adapter is in-process state, reset on restart)", fillcolor="#e3f5e1"];
+    config  [label="config.py + constants.py\nenv vars / .env", shape=note, fillcolor="#fff6d5"];
+  }
+
+  user [label="Reviewer\n(browser)", shape=oval, fillcolor="#f2f2f2"];
+
+  installer -> hooksjson [label="writes"];
+  installer -> logger    [label="copies"];
+  windsurf  -> hooksjson [label="reads on start"];
+  windsurf  -> logger    [label="runs per event,\nJSON on stdin"];
+  logger    -> logs      [label="appends JSONL"];
+  logs      -> cloud     [label="external sync\n(optional)", style=dashed];
+  launchers -> flask     [label="starts", style=dotted];
+  launchers -> spa       [label="starts", style=dotted];
+
+  user  -> spa      [label="views, filters,\nsearch, export"];
+  spa   -> flask    [label="fetch /api/*"];
+  flask -> adapters [label="list / read files"];
+  flask -> config   [style=dotted, arrowhead=none];
+  adapters -> logs  [label="local path", dir=back, constraint=false];
+  adapters -> cloud [label="boto3 / azure-storage-blob\n(requirements-cloud.txt)"];
+}
