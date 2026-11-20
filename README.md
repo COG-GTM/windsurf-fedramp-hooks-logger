@@ -371,7 +371,7 @@ The dashboard supports reading logs from AWS S3 or Azure Blob Storage. This is u
 
 To configure, either:
 1. Use the **Storage** settings in the dashboard UI
-2. Set environment variables in a `.env` file (copy from `.env.example`)
+2. Export the `AWS_*` / `AZURE_STORAGE_*` variables listed in `.env.example` before starting the dashboard (with `start.sh` / `start.bat` a repo-root `.env` also supplies these credentials; see [Configuration](docs/architecture.md#configuration) for which settings `.env` cannot set)
 
 The S3 and Azure SDKs are optional and are not in `requirements.txt` or `requirements.lock`. Install them into the dashboard's environment when you need cloud storage:
 ```bash

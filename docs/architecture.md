@@ -37,7 +37,7 @@ Diagram source: [`diagrams/architecture.dot`](diagrams/architecture.dot) (Graphv
 
 ### 3. Remote storage
 
-1. In the directory picker, choose AWS S3 or Azure Blob and enter bucket/prefix or container/path (credentials can come from the form or from `.env`; `/api/config/env-info` reports which env credentials exist).
+1. In the directory picker, choose AWS S3 or Azure Blob and enter bucket/prefix or container/path (credentials can come from the form or from environment variables; `/api/config/env-info` reports which env credentials exist).
 2. `POST /api/storage/test` checks the connection; `POST /api/storage/configure` activates the adapter and clears the cache. Log endpoints then read through the adapter (`s3://` / `azure://` directories).
 3. This repo does not ship logs to the cloud. Getting `<data dir>/logs` into the bucket or container is an external sync job.
 
@@ -50,7 +50,9 @@ Diagram source: [`diagrams/architecture.dot`](diagrams/architecture.dot) (Graphv
 
 ## Configuration
 
-All settings are environment variables (a `.env` file is supported); see [`.env.example`](../.env.example) for the full list and defaults. The main ones are `WINDSURF_LOG_DIR`, `FLASK_HOST` / `FLASK_PORT`, `WINDSURF_API_KEY`, `WINDSURF_CORS_ORIGINS`, `ENABLE_ADMIN_ENDPOINTS`, the rotation settings above, and the `AWS_*` / `AZURE_STORAGE_*` credentials.
+All settings are environment variables; see [`.env.example`](../.env.example) for the full list and defaults. The main ones are `WINDSURF_LOG_DIR`, `FLASK_HOST` / `FLASK_PORT`, `WINDSURF_API_KEY`, `WINDSURF_CORS_ORIGINS`, `ENABLE_ADMIN_ENDPOINTS`, the rotation settings above, and the `AWS_*` / `AZURE_STORAGE_*` credentials.
+
+Export settings in the shell (or set them in `docker-compose.yml`) before starting the backend. Nothing loads `.env` before `config.py` reads its values at import time, so `.env` does not set `WINDSURF_LOG_DIR`, `FLASK_*`, `WINDSURF_API_KEY` and the other module-level settings. With `start.sh` / `start.bat`, Flask's `app.run()` loads a `.env` found from the working directory upward (python-dotenv) after that import, so only values read per request take effect from it: the cloud credentials checked by `/api/config/env-info` and the storage adapters. Gunicorn (Docker) does not load `.env`.
 
 ## Tests
 
