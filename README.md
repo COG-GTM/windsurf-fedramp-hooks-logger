@@ -2,10 +2,12 @@
 
 Comprehensive logging for all Windsurf Cascade hook events with a dashboard for review and analysis.
 
+**Architecture:** see [docs/architecture.md](docs/architecture.md) for how hooks, the logger, log storage (local, S3, Azure Blob) and the dashboard fit together, with a [diagram](docs/diagrams/architecture.png) ([SVG](docs/diagrams/architecture.svg), [Graphviz source](docs/diagrams/architecture.dot)).
+
 ## Prerequisites
 
 Before installing, ensure you have:
-- **Python 3.8+** installed (`python3 --version` to check)
+- **Python 3.10+** installed (the minimum in `pyproject.toml`) (`python3 --version` to check)
 - **Node.js 18+** and **npm** installed (`node --version` and `npm --version` to check)
 - **Windsurf** IDE installed and run at least once (creates required directories)
 
@@ -67,6 +69,22 @@ The dashboard will:
 4. Start the backend API on port 5173
 5. Start the frontend on port 5174
 6. Open your browser to http://localhost:5174
+
+> **Known issue:** the backend imports `config.py` from the repository root, but the start scripts run `app.py` from `dashboard/backend` without adding the root to the import path, so the backend exits with `ModuleNotFoundError: No module named 'config'`. Until that is fixed, start the dashboard from the repository root with `PYTHONPATH` set:
+> ```bash
+> # macOS/Linux
+> PYTHONPATH="$PWD" ./dashboard/start.sh
+>
+> # Windows (cmd)
+> set PYTHONPATH=%CD%
+> dashboard\start.bat
+> ```
+
+**Alternative - Docker:**
+```bash
+docker compose up --build
+```
+This builds the frontend into the image and serves the API and dashboard together on http://localhost:5173, reading logs from `./logs` in the repository (mounted at `/app/logs`). Copy or mount your Windsurf log directory there to view it.
 
 ### Step 4: Stop the Dashboard
 
@@ -355,4 +373,21 @@ To configure, either:
 1. Use the **Storage** settings in the dashboard UI
 2. Set environment variables in a `.env` file (copy from `.env.example`)
 
-Required packages are included in `requirements.txt` but can be skipped for local-only usage.
+The S3 and Azure SDKs are optional and are not in `requirements.txt` or `requirements.lock`. Install them into the dashboard's environment when you need cloud storage:
+```bash
+dashboard/backend/venv/bin/pip install -r dashboard/backend/requirements-cloud.txt
+```
+The Docker image installs only `requirements.lock`, so cloud storage in Docker needs `requirements-cloud.txt` added to the image.
+
+---
+
+## Running Tests
+
+```bash
+# Python (from the repository root)
+pip install -r requirements.lock pytest
+pytest
+
+# Frontend
+cd dashboard/frontend && npm ci && npm test
+```
