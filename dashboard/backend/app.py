@@ -1332,16 +1332,22 @@ def _encode_json_float(o: float) -> str:
 
 
 _INDENT2_PIECES: Dict[int, tuple] = {}
+_INDENT2_CACHED_LEVELS = 32
 
 
 def _indent2_pieces(level: int) -> tuple:
-    """Shared (dict open, list open, separator, dict close, list close) strings for one depth."""
+    """(dict open, list open, separator, dict close, list close) strings for one depth.
+
+    Shallow depths are cached and shared; deeper ones are built per call so
+    one pathologically deep log cannot grow the cache.
+    """
     pieces = _INDENT2_PIECES.get(level)
     if pieces is None:
         ind = '  ' * level
         inner = ind + '  '
-        pieces = _INDENT2_PIECES.setdefault(
-            level, ('{\n' + inner, '[\n' + inner, ',\n' + inner, '\n' + ind + '}', '\n' + ind + ']'))
+        pieces = ('{\n' + inner, '[\n' + inner, ',\n' + inner, '\n' + ind + '}', '\n' + ind + ']')
+        if level < _INDENT2_CACHED_LEVELS:
+            pieces = _INDENT2_PIECES.setdefault(level, pieces)
     return pieces
 
 

@@ -402,6 +402,7 @@ def test_dumps_indent2_handles_deep_nesting_like_stdlib(client_no_auth):
     for _ in range(900):
         payload = [payload, {"k": "v"}]
     assert app_module._dumps_indent2(payload) == json.dumps(payload, indent=2)
+    assert max(app_module._INDENT2_PIECES) < app_module._INDENT2_CACHED_LEVELS
 
 
 def test_export_json_matches_stdlib_indent(client_no_auth, populate_log_dir):
