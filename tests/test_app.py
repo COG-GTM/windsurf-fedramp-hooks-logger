@@ -396,6 +396,14 @@ def test_dumps_indent2_falls_back_for_non_plain_json(client_no_auth, payload):
     assert app_module._dumps_indent2(payload) == json.dumps(payload, indent=2)
 
 
+def test_dumps_indent2_handles_deep_nesting_like_stdlib(client_no_auth):
+    _, app_module = client_no_auth
+    payload: list = []
+    for _ in range(900):
+        payload = [payload, {"k": "v"}]
+    assert app_module._dumps_indent2(payload) == json.dumps(payload, indent=2)
+
+
 def test_export_json_matches_stdlib_indent(client_no_auth, populate_log_dir):
     client, app_module = client_no_auth
     resp = client.get("/api/logs/export?format=json")

@@ -1304,14 +1304,17 @@ def _dumps_indent2(obj: Any) -> str:
 
     The stdlib only uses its C encoder when ``indent`` is None, so indented
     exports of large logs fall back to the much slower pure-Python encoder.
-    This builds the same output with str.join and the C string escaper.
-    Anything outside plain JSON types (as produced by ``json.loads``) is
-    delegated to the stdlib.
+    This emits the same fragments into one list (each written once, one
+    stack frame per nesting level like the stdlib) using the C string
+    escaper. Anything outside plain JSON types (as produced by
+    ``json.loads``) is delegated to the stdlib.
     """
+    out: List[str] = []
     try:
-        return _encode_indent2(obj, '')
-    except (_NotPlainJSON, TypeError):
+        _emit_indent2(obj, '', out)
+    except (_NotPlainJSON, TypeError, RecursionError):
         return json.dumps(obj, indent=2)
+    return ''.join(out)
 
 
 class _NotPlainJSON(Exception):
@@ -1328,34 +1331,48 @@ def _encode_json_float(o: float) -> str:
     return float.__repr__(o)
 
 
-def _encode_indent2(o: Any, ind: str) -> str:
+def _emit_indent2(o: Any, ind: str, out: List[str]) -> None:
     t = type(o)
     if t is str:
-        return _json_encode_str(o)
-    if t is dict:
+        out.append(_json_encode_str(o))
+    elif t is dict or t is list:
         if not o:
-            return '{}'
+            out.append('{}' if t is dict else '[]')
+            return
         inner = ind + '  '
-        # A non-str key makes _json_encode_str raise TypeError -> stdlib fallback.
-        return ('{\n' + inner
-                + (',\n' + inner).join([_json_encode_str(k) + ': ' + _encode_indent2(v, inner) for k, v in o.items()])
-                + '\n' + ind + '}')
-    if t is list:
-        if not o:
-            return '[]'
-        inner = ind + '  '
-        return '[\n' + inner + (',\n' + inner).join([_encode_indent2(v, inner) for v in o]) + '\n' + ind + ']'
-    if o is None:
-        return 'null'
-    if o is True:
-        return 'true'
-    if o is False:
-        return 'false'
-    if t is int:
-        return int.__repr__(o)
-    if t is float:
-        return _encode_json_float(o)
-    raise _NotPlainJSON
+        sep = ',\n' + inner
+        out.append(('{\n' if t is dict else '[\n') + inner)
+        first = True
+        if t is dict:
+            for k, v in o.items():
+                if first:
+                    first = False
+                else:
+                    out.append(sep)
+                # A non-str key makes _json_encode_str raise TypeError -> stdlib fallback.
+                out.append(_json_encode_str(k))
+                out.append(': ')
+                _emit_indent2(v, inner, out)
+        else:
+            for v in o:
+                if first:
+                    first = False
+                else:
+                    out.append(sep)
+                _emit_indent2(v, inner, out)
+        out.append(('\n' + ind + '}') if t is dict else ('\n' + ind + ']'))
+    elif o is None:
+        out.append('null')
+    elif o is True:
+        out.append('true')
+    elif o is False:
+        out.append('false')
+    elif t is int:
+        out.append(int.__repr__(o))
+    elif t is float:
+        out.append(_encode_json_float(o))
+    else:
+        raise _NotPlainJSON
 
 
 @app.route('/api/logs/export', methods=['GET'])
