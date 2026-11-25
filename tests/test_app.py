@@ -367,3 +367,31 @@ def test_count_jsonl_entries_cache(monkeypatch, populate_log_dir):
     with app_module._count_cache_lock:
         app_module._count_cache[filepath] = (app_module._count_cache[filepath][0], 999)
     assert app_module.count_jsonl_entries(filepath) == 999
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {},
+        [[], {}, "", 0, -1, 2**70, 1.5, 1e300, -0.0, float("nan"), float("inf"), float("-inf"), True, False, None],
+        {"unicode": "caf\u00e9 \u2603 \U0001f600", "ctrl": "a\"b\\c\n\t\x00", "nested": {"a": [1, {"b": []}], "c": {}}},
+    ],
+)
+def test_dumps_indent2_matches_stdlib(client_no_auth, payload):
+    _, app_module = client_no_auth
+    assert app_module._dumps_indent2(payload) == json.dumps(payload, indent=2)
+
+
+def test_dumps_indent2_falls_back_for_non_plain_json(client_no_auth):
+    _, app_module = client_no_auth
+    payload = {"t": (1, 2), 3: "int key", "nested": [{"x": (None,)}]}
+    assert app_module._dumps_indent2(payload) == json.dumps(payload, indent=2)
+
+
+def test_export_json_matches_stdlib_indent(client_no_auth, populate_log_dir):
+    client, app_module = client_no_auth
+    resp = client.get("/api/logs/export?format=json")
+    assert resp.status_code == 200
+    expected = app_module.parse_jsonl_file(str(populate_log_dir / "all_events.jsonl"))
+    assert resp.get_data(as_text=True) == json.dumps(expected, indent=2)

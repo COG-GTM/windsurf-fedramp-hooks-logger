@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 from collections import OrderedDict, deque
 from typing import Optional, Dict, List, Any, Generator
+from json.encoder import encode_basestring_ascii as _json_encode_str
 
 # Storage adapters (sibling module — same directory).
 from storage_adapters import (
@@ -1298,6 +1299,65 @@ def get_metrics():
     })
 
 
+def _dumps_indent2(obj: Any) -> str:
+    """Byte-identical equivalent of ``json.dumps(obj, indent=2)``.
+
+    The stdlib only uses its C encoder when ``indent`` is None, so indented
+    exports of large logs fall back to the much slower pure-Python encoder.
+    This builds the same output with str.join and the C string escaper.
+    Anything outside plain JSON types (as produced by ``json.loads``) is
+    delegated to the stdlib.
+    """
+    try:
+        return _encode_indent2(obj, '')
+    except (_NotPlainJSON, TypeError):
+        return json.dumps(obj, indent=2)
+
+
+class _NotPlainJSON(Exception):
+    pass
+
+
+def _encode_json_float(o: float) -> str:
+    if o != o:
+        return 'NaN'
+    if o == float('inf'):
+        return 'Infinity'
+    if o == float('-inf'):
+        return '-Infinity'
+    return float.__repr__(o)
+
+
+def _encode_indent2(o: Any, ind: str) -> str:
+    t = type(o)
+    if t is str:
+        return _json_encode_str(o)
+    if t is dict:
+        if not o:
+            return '{}'
+        inner = ind + '  '
+        # A non-str key makes _json_encode_str raise TypeError -> stdlib fallback.
+        return ('{\n' + inner
+                + (',\n' + inner).join([_json_encode_str(k) + ': ' + _encode_indent2(v, inner) for k, v in o.items()])
+                + '\n' + ind + '}')
+    if t is list:
+        if not o:
+            return '[]'
+        inner = ind + '  '
+        return '[\n' + inner + (',\n' + inner).join([_encode_indent2(v, inner) for v in o]) + '\n' + ind + ']'
+    if o is None:
+        return 'null'
+    if o is True:
+        return 'true'
+    if o is False:
+        return 'false'
+    if t is int:
+        return int.__repr__(o)
+    if t is float:
+        return _encode_json_float(o)
+    raise _NotPlainJSON
+
+
 @app.route('/api/logs/export', methods=['GET'])
 @rate_limit
 def export_logs():
@@ -1364,7 +1424,7 @@ def export_logs():
         )
     else:
         return Response(
-            json.dumps(entries, indent=2),
+            _dumps_indent2(entries),
             mimetype='application/json',
             headers={'Content-Disposition': 'attachment; filename=cascade_logs.json'}
         )
