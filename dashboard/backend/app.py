@@ -1311,7 +1311,7 @@ def _dumps_indent2(obj: Any) -> str:
     """
     out: List[str] = []
     try:
-        _emit_indent2(obj, '', out)
+        _emit_indent2(obj, 0, out)
     except (_NotPlainJSON, TypeError, RecursionError):
         return json.dumps(obj, indent=2)
     return ''.join(out)
@@ -1331,36 +1331,55 @@ def _encode_json_float(o: float) -> str:
     return float.__repr__(o)
 
 
-def _emit_indent2(o: Any, ind: str, out: List[str]) -> None:
+_INDENT2_PIECES: Dict[int, tuple] = {}
+
+
+def _indent2_pieces(level: int) -> tuple:
+    """Shared (dict open, list open, separator, dict close, list close) strings for one depth."""
+    pieces = _INDENT2_PIECES.get(level)
+    if pieces is None:
+        ind = '  ' * level
+        inner = ind + '  '
+        pieces = _INDENT2_PIECES.setdefault(
+            level, ('{\n' + inner, '[\n' + inner, ',\n' + inner, '\n' + ind + '}', '\n' + ind + ']'))
+    return pieces
+
+
+def _emit_indent2(o: Any, level: int, out: List[str]) -> None:
     t = type(o)
     if t is str:
         out.append(_json_encode_str(o))
-    elif t is dict or t is list:
+    elif t is dict:
         if not o:
-            out.append('{}' if t is dict else '[]')
+            out.append('{}')
             return
-        inner = ind + '  '
-        sep = ',\n' + inner
-        out.append(('{\n' if t is dict else '[\n') + inner)
+        open_d, _, sep, close_d, _ = _indent2_pieces(level)
+        out.append(open_d)
         first = True
-        if t is dict:
-            for k, v in o.items():
-                if first:
-                    first = False
-                else:
-                    out.append(sep)
-                # A non-str key makes _json_encode_str raise TypeError -> stdlib fallback.
-                out.append(_json_encode_str(k))
-                out.append(': ')
-                _emit_indent2(v, inner, out)
-        else:
-            for v in o:
-                if first:
-                    first = False
-                else:
-                    out.append(sep)
-                _emit_indent2(v, inner, out)
-        out.append(('\n' + ind + '}') if t is dict else ('\n' + ind + ']'))
+        for k, v in o.items():
+            if first:
+                first = False
+            else:
+                out.append(sep)
+            # A non-str key makes _json_encode_str raise TypeError -> stdlib fallback.
+            out.append(_json_encode_str(k))
+            out.append(': ')
+            _emit_indent2(v, level + 1, out)
+        out.append(close_d)
+    elif t is list:
+        if not o:
+            out.append('[]')
+            return
+        _, open_l, sep, _, close_l = _indent2_pieces(level)
+        out.append(open_l)
+        first = True
+        for v in o:
+            if first:
+                first = False
+            else:
+                out.append(sep)
+            _emit_indent2(v, level + 1, out)
+        out.append(close_l)
     elif o is None:
         out.append('null')
     elif o is True:
