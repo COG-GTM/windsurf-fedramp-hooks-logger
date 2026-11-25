@@ -383,9 +383,16 @@ def test_dumps_indent2_matches_stdlib(client_no_auth, payload):
     assert app_module._dumps_indent2(payload) == json.dumps(payload, indent=2)
 
 
-def test_dumps_indent2_falls_back_for_non_plain_json(client_no_auth):
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"t": (1, 2)},
+        {3: "int key", "nested": {True: None}},
+        [{"x": "ok"}, {"y": [1, {None: 2}]}],
+    ],
+)
+def test_dumps_indent2_falls_back_for_non_plain_json(client_no_auth, payload):
     _, app_module = client_no_auth
-    payload = {"t": (1, 2), 3: "int key", "nested": [{"x": (None,)}]}
     assert app_module._dumps_indent2(payload) == json.dumps(payload, indent=2)
 
 
