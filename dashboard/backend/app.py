@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 from collections import OrderedDict, deque
 from typing import Optional, Dict, List, Any, Generator
+from json.encoder import encode_basestring_ascii as _json_encode_str
 
 # Storage adapters (sibling module — same directory).
 from storage_adapters import (
@@ -1298,6 +1299,107 @@ def get_metrics():
     })
 
 
+def _dumps_indent2(obj: Any) -> str:
+    """Byte-identical equivalent of ``json.dumps(obj, indent=2)``.
+
+    The stdlib only uses its C encoder when ``indent`` is None, so indented
+    exports of large logs fall back to the much slower pure-Python encoder.
+    This emits the same fragments into one list (each written once, one
+    stack frame per nesting level like the stdlib) using the C string
+    escaper. Anything outside plain JSON types (as produced by
+    ``json.loads``) is delegated to the stdlib.
+    """
+    out: List[str] = []
+    try:
+        _emit_indent2(obj, 0, out)
+    except (_NotPlainJSON, TypeError, RecursionError):
+        return json.dumps(obj, indent=2)
+    return ''.join(out)
+
+
+class _NotPlainJSON(Exception):
+    pass
+
+
+def _encode_json_float(o: float) -> str:
+    if o != o:
+        return 'NaN'
+    if o == float('inf'):
+        return 'Infinity'
+    if o == float('-inf'):
+        return '-Infinity'
+    return float.__repr__(o)
+
+
+_INDENT2_PIECES: Dict[int, tuple] = {}
+_INDENT2_CACHED_LEVELS = 32
+
+
+def _indent2_pieces(level: int) -> tuple:
+    """(dict open, list open, separator, dict close, list close) strings for one depth.
+
+    Shallow depths are cached and shared; deeper ones are built per call so
+    one pathologically deep log cannot grow the cache.
+    """
+    pieces = _INDENT2_PIECES.get(level)
+    if pieces is None:
+        ind = '  ' * level
+        inner = ind + '  '
+        pieces = ('{\n' + inner, '[\n' + inner, ',\n' + inner, '\n' + ind + '}', '\n' + ind + ']')
+        if level < _INDENT2_CACHED_LEVELS:
+            pieces = _INDENT2_PIECES.setdefault(level, pieces)
+    return pieces
+
+
+def _emit_indent2(o: Any, level: int, out: List[str]) -> None:
+    t = type(o)
+    if t is str:
+        out.append(_json_encode_str(o))
+    elif t is dict:
+        if not o:
+            out.append('{}')
+            return
+        open_d, _, sep, close_d, _ = _indent2_pieces(level)
+        out.append(open_d)
+        first = True
+        for k, v in o.items():
+            if first:
+                first = False
+            else:
+                out.append(sep)
+            # A non-str key makes _json_encode_str raise TypeError -> stdlib fallback.
+            out.append(_json_encode_str(k))
+            out.append(': ')
+            _emit_indent2(v, level + 1, out)
+        out.append(close_d)
+    elif t is list:
+        if not o:
+            out.append('[]')
+            return
+        _, open_l, sep, _, close_l = _indent2_pieces(level)
+        out.append(open_l)
+        first = True
+        for v in o:
+            if first:
+                first = False
+            else:
+                out.append(sep)
+            _emit_indent2(v, level + 1, out)
+        out.append(close_l)
+    elif o is None:
+        out.append('null')
+    elif o is True:
+        out.append('true')
+    elif o is False:
+        out.append('false')
+    elif t is int:
+        out.append(int.__repr__(o))
+    elif t is float:
+        out.append(_encode_json_float(o))
+    else:
+        raise _NotPlainJSON
+
+
 @app.route('/api/logs/export', methods=['GET'])
 @rate_limit
 def export_logs():
@@ -1364,7 +1466,7 @@ def export_logs():
         )
     else:
         return Response(
-            json.dumps(entries, indent=2),
+            _dumps_indent2(entries),
             mimetype='application/json',
             headers={'Content-Disposition': 'attachment; filename=cascade_logs.json'}
         )
